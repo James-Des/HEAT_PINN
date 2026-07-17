@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Python temporary files
+__pycache__/
+*.pyc
+
+# Jupyter temporary files
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# Python environments
+.venv/
+venv/
+
+# Optuna generated storage
+optuna_*.db
+*_hpo_study.pkl
