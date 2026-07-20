@@ -131,7 +131,7 @@ def compute_loss_inverse(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic, x_obs, 
     
     return total_loss, pde_loss, bc_loss, ic_loss, data_loss
 
-def train_inverse(inverse_config, print_training=True, trial=None):
+def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, trial=None):
     activation  = inverse_config.get("activation",   "tanh")
     lambda_pde  = inverse_config.get("lambda_pde",   1.0)
     lambda_bc   = inverse_config.get("lambda_bc",    1.0)
@@ -143,7 +143,6 @@ def train_inverse(inverse_config, print_training=True, trial=None):
     optimizer = torch.optim.Adam(list(model.parameters()) + [alpha], lr=inverse_config["adam_lr"])
 
     x_f, t_f, x_bc, t_bc, x_ic, t_ic = sample_points(inverse_config["N_f"], inverse_config["N_bc"], inverse_config["N_ic"])
-    x_obs, t_obs, u_obs = generate_noisy_data(inverse_config)
 
     history_total = []
     history_pde = []
