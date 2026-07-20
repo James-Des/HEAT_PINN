@@ -312,7 +312,7 @@ def cn_nls_baseline(inverse_config, x_obs, t_obs, u_obs):
     
     print(f"CN-NLS total runtime: {cn_nls_time:.2f}s")  # NEW
     
-    return best_alpha_guess, mse_history, alpha_candidates
+    return best_alpha_guess, mse_history, alpha_candidates, cn_nls_time
 
 
     
