@@ -40,6 +40,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from scipy.interpolate import RegularGridInterpolator
+from scipy.sparse import diags
+from scipy.sparse.linalg import splu
 
 
 def set_seed(seed: int) -> None:
@@ -241,7 +243,7 @@ def train_inverse(inverse_config, print_training=True, trial=None):
         "u_obs": u_obs,
     }
 
-def fd_solver( N_x, N_t, alpha = 0.4, T = 1.0, L = 1):
+def fd_solver( N_x, N_t, alpha = 0.4, T = 1.0, L = 1, compute_error = True):
     dx = L / (N_x - 1)
     dt = T / (N_t - 1)
     
@@ -254,22 +256,24 @@ def fd_solver( N_x, N_t, alpha = 0.4, T = 1.0, L = 1):
     
     u[:, 0] = np.sin(np.pi * x)
     
-    #setup tridiagonal matrix
+    #setup tridiagonal matrix (sparse, factored once, reused every timestep)
     main_diag = (1 + r) * np.ones(N_x - 2) # -2 here because endpoints are zeros
     off_diag = (-r/2) * np.ones(N_x - 3)
-    
-    A = np.diag(main_diag) + np.diag(off_diag, 1) + np.diag(off_diag, -1)
-    
+
+    A = diags([off_diag, main_diag, off_diag], offsets=[-1, 0, 1], format='csc')
+    A_factored = splu(A)
+
     for  n in range(N_t - 1):
         b = (r/2) * u[:-2, n] + (1-r) * u[1:-1, n] + (r/2) * u[2:, n]
-        u_new = np.linalg.solve(A, b)
+        u_new = A_factored.solve(b)
         u[1:-1, n+1] = u_new
     
-    X, T = np.meshgrid(x, t, indexing='ij')
-    u_exact = np.sin(np.pi * X) * np.exp(-alpha * (np.pi**2) * T)
-
-    
-    error = np.linalg.norm(u - u_exact) / np.linalg.norm(u_exact)
+    if compute_error:
+        X, T = np.meshgrid(x, t, indexing='ij')
+        u_exact = np.sin(np.pi * X) * np.exp(-alpha * (np.pi**2) * T)
+        error = np.linalg.norm(u - u_exact) / np.linalg.norm(u_exact)
+    else:
+        error = None
 
     return x, t, u, error
 
@@ -285,7 +289,7 @@ def cn_nls_baseline(inverse_config, x_obs, t_obs, u_obs):
     cn_nls_start = time.time()  # NEW: added timing (original had none)
     
     for alpha_guess in alpha_candidates:
-        x, t, u_guess, _ = fd_solver( N_x = 200, N_t = 200, alpha = alpha_guess)
+        x, t, u_guess, _ = fd_solver( N_x = 200, N_t = 200, alpha = alpha_guess, compute_error = False)
         
         interp = RegularGridInterpolator((x, t), u_guess)
         
