@@ -243,9 +243,9 @@ def train_inverse(inverse_config, print_training=True, trial=None):
         "u_obs": u_obs,
     }
 
-def fd_solver( N_x, N_t, alpha = 0.4, T = 1.0, L = 1, compute_error = True):
-    dx = L / (N_x - 1)
-    dt = T / (N_t - 1)
+def fd_solver( N_x, N_t, alpha = 0.4, compute_error = True):
+    dx = 1 / (N_x - 1)
+    dt = 1 / (N_t - 1)
     
     r = alpha * dt / (dx **2)
     
@@ -282,7 +282,7 @@ from scipy.interpolate import RegularGridInterpolator
 
 def cn_nls_baseline(inverse_config, x_obs, t_obs, u_obs):
     
-    alpha_candidates = np.linspace(0.01, 1.0, 200)
+    alpha_candidates = np.linspace(0.01, 1.0, inverse_config.get("n_alpha_candidates", 200))
     
     mse_history = []
     
