@@ -28,10 +28,13 @@ Changes, and why each was necessary:
      none). Return signature is UNCHANGED (still a 3-tuple) so existing
      call sites that unpack `best_alpha, mse_history, alpha_candidates =
      cn_nls_baseline(...)` do not need to change.
+  4. train_forward() -- moved here from heat_pinn_tuned.ipynb (forward
+     counterpart to train_inverse). Same local `import optuna` fix as
+     train_inverse, and for the same reason.
 
-fd_solver(), pinn_architecture, sample_points, generate_noisy_data, and
-compute_loss_inverse are byte-for-byte what was already in
-heat_pinn_tuned.ipynb -- no reformatting, no renamed variables.
+fd_solver(), pinn_architecture, sample_points, generate_noisy_data,
+compute_loss, and compute_loss_inverse are byte-for-byte what was already
+in heat_pinn_tuned.ipynb -- no reformatting, no renamed variables.
 """
 
 import time
@@ -102,6 +105,149 @@ def generate_noisy_data(inverse_config):
     u_obs = u_exact + noise
     
     return x_obs, t_obs, u_obs
+
+def compute_loss(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic,
+                 lambda_pde=1.0, lambda_bc=1.0, lambda_ic=1.0):
+    x_f.requires_grad_(True)
+    t_f.requires_grad_(True)
+    
+    #get u values from model
+    u_f = model(x_f,t_f)
+    
+    #compute x derivatives using autograd
+    u_x = torch.autograd.grad(u_f, x_f, grad_outputs = torch.ones_like(u_f), create_graph = True)[0]
+    u_xx = torch.autograd.grad(u_x, x_f, grad_outputs = torch.ones_like(u_x), create_graph = True)[0]
+    
+    #compute t derivative the same way
+    u_t = torch.autograd.grad(u_f, t_f, grad_outputs = torch.ones_like(u_f), create_graph = True)[0]
+    
+    #pde loss from pde residual
+    pde_residual = u_t - alpha * u_xx
+    pde_loss = torch.mean(pde_residual**2)
+    
+    #boundary condition loss 
+    u_bc = model(x_bc, t_bc)
+    bc_loss = torch.mean(u_bc**2)
+    
+    #initial conditions loss from start u(x,0) = sin(pi*x)
+    u_ic = model(x_ic, t_ic)
+    true_ic = torch.sin(torch.pi * x_ic)
+    ic_loss = torch.mean((u_ic - true_ic)**2)
+    
+    total_loss = lambda_pde * pde_loss + lambda_bc * bc_loss + lambda_ic * ic_loss
+    
+    return total_loss, pde_loss, bc_loss, ic_loss
+
+def train_forward(forward_config, print_training=True, trial=None):
+    activation = forward_config.get("activation", "tanh")
+    lambda_pde = forward_config.get("lambda_pde", 1.0)
+    lambda_bc  = forward_config.get("lambda_bc",  1.0)
+    lambda_ic  = forward_config.get("lambda_ic",  1.0)
+
+    model = pinn_architecture(forward_config["hidden_size"], forward_config["n_layers"], activation)
+
+    alpha = 0.4
+
+    optimizer = torch.optim.Adam(model.parameters(), lr = forward_config["adam_lr"])
+
+    x_f, t_f, x_bc, t_bc, x_ic, t_ic = sample_points(forward_config["N_f"], forward_config["N_bc"], forward_config["N_ic"])
+
+    N_iters = forward_config["adam_iters"]
+
+    history_total = []
+    history_pde = []
+    history_bc = []
+    history_ic = []
+
+    pinn_train_start = time.time()
+
+    for i in range(1, N_iters + 1):
+        optimizer.zero_grad()
+        
+        total_loss, pde_loss, bc_loss, ic_loss = compute_loss(
+            model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic,
+            lambda_pde, lambda_bc, lambda_ic)
+        
+        total_loss.backward()
+        optimizer.step()
+        
+        history_total.append(total_loss.item())
+        history_pde.append(pde_loss.item())
+        history_bc.append(bc_loss.item())
+        history_ic.append(ic_loss.item())
+        
+        if print_training and i % 200 == 0:
+            print(f"Iter {i} | Total: {total_loss.item():.4e} | PDE: {pde_loss.item():.4e} | BC: {bc_loss.item():.4e} | IC: {ic_loss.item():.4e}")
+
+        if trial is not None and i % 200 == 0:
+            import optuna  # local import: only needed on this path, and must be
+                            # bound in this module now that train_forward no longer
+                            # lives in the same notebook namespace as `import optuna`
+            trial.report(total_loss.item(), i)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+
+    adam_iters = len(history_total)
+
+    optimizer_lbfgs = torch.optim.LBFGS(model.parameters(), lr=1.0, max_iter=forward_config["lbfgs_iters"])
+    lbfgs_iter = [0]
+
+    def closure():
+        optimizer_lbfgs.zero_grad()
+        total_loss, pde_loss, bc_loss, ic_loss = compute_loss(
+            model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic,
+            lambda_pde, lambda_bc, lambda_ic)
+        total_loss.backward()
+        
+        history_total.append(total_loss.item())
+        history_pde.append(pde_loss.item())
+        history_bc.append(bc_loss.item())
+        history_ic.append(ic_loss.item())
+        
+        lbfgs_iter[0] += 1
+        
+        if print_training and lbfgs_iter[0] % 10 == 0:
+            print(f"L-BFGS Iter {lbfgs_iter[0]} | Total: {total_loss.item():.4e} | PDE: {pde_loss.item():.4e} | BC: {bc_loss.item():.4e} | IC: {ic_loss.item():.4e}")
+
+        return total_loss
+
+    optimizer_lbfgs.step(closure)
+
+    pinn_train_time = time.time() - pinn_train_start
+
+    # Validation grid for HPO/model-selection (Optuna objective + the
+    # top-configs retrain loop below) -- offset by half a grid cell from
+    # the final comparison cell's grid (torch.linspace(0, 1, 1000)), so no
+    # point used to pick a winning model is ever reused as a "final" test
+    # point. Without this offset, the same 1000x1000 points would both
+    # choose the winning hyperparameters and report how accurate the
+    # winner is, which biases the reported accuracy optimistically.
+    x_eval = torch.linspace(0.0005, 0.9995, 1000)
+    t_eval = torch.linspace(0.0005, 0.9995, 1000)
+    X_eval, T_eval = torch.meshgrid(x_eval, t_eval, indexing='ij')
+    x_flat = X_eval.reshape(-1, 1)
+    t_flat = T_eval.reshape(-1, 1)
+
+    with torch.no_grad():
+        u_pred = model(x_flat, t_flat)
+    u_exact = torch.sin(torch.pi * x_flat) * torch.exp(-alpha * (torch.pi**2) * t_flat)
+    rel_l2 = (torch.norm(u_pred - u_exact) / torch.norm(u_exact)).item()
+
+    
+    print(f"\nPINN total training time: {pinn_train_time:.2f}s")
+    #print(f"Adam iterations: {adam_iters} | L-BFGS closure calls: {lbfgs_iter[0]}")
+    print(f"Rel L2 error: {rel_l2:.4e}")
+
+    return {
+        "model": model,
+        "history_total": history_total,
+        "history_pde": history_pde,
+        "history_bc": history_bc,
+        "history_ic": history_ic,
+        "adam_iters": adam_iters,
+        "train_time": pinn_train_time,
+        "rel_l2": rel_l2,
+    }
 
 def compute_loss_inverse(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic, x_obs, t_obs, u_obs,
                          lambda_pde=1.0, lambda_bc=1.0, lambda_ic=1.0, lambda_data=1.0):
