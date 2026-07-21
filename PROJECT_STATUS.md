@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-July 20, 2026
+July 21, 2026
 
 ## Current Branch
 
@@ -75,10 +75,18 @@ These issues have been identified but not yet corrected:
   configuration value.
 - `heat_pinn_basic.ipynb` does not currently run cleanly from top to bottom and
   duplicates (with some divergence) logic that now lives in `pinn_shared.py`.
-  Plan: extract its baseline configs into one final consolidated notebook that
-  imports from `pinn_shared.py`, verify/save corrected baseline results, then
-  remove the duplicate notebook from `methodology-cleanup` (preserved on
-  `main`). Do not fix it in place.
+  Refined July 21, 2026: its only remaining value is the original
+  hyperparameter choices, not its code, so the plan is now to capture those
+  as explicit "no-tuning baseline" configs run through the shared training
+  functions rather than build it out as a second parallel notebook. A
+  forward baseline (`forward_config`, already literature-matched) now runs
+  in `heat_pinn_tuned.ipynb` across 5 seeds. An inverse baseline
+  (`baseline_inverse_config`) is scaffolded there too, but its hyperparameter
+  values are still `None` placeholders pending the researcher transcribing
+  the exact original inverse config from `heat_pinn_basic.ipynb`. Once
+  that's filled in and both baselines produce real numbers,
+  `heat_pinn_basic.ipynb` can be removed from `methodology-cleanup`
+  (preserved on `main`).
 - No `requirements.txt`/environment file, and `README.md` is a single
   placeholder sentence -- a fresh clone currently has no setup instructions or
   dependency list.
@@ -136,11 +144,42 @@ comparisons against pre-change behavior, small mock Optuna sweeps,
 reproducibility checks) rather than full notebook execution or real Optuna
 sweeps.
 
+## Completed Cleanup Work (July 21, 2026)
+
+- Added a "baseline (no-tuning) forward PINN" cell to `heat_pinn_tuned.ipynb`
+  that runs the pre-existing (previously unused) `forward_config` -- the
+  literature-informed hyperparameters originally used in
+  `heat_pinn_basic.ipynb` -- across 5 seeds, reporting mean +/- std rel L2
+  error on both the validation grid and the held-out test grid, using the
+  same multi-seed methodology as the tuned top-configs retrain loop.
+- Added a `baseline_inverse_config` scaffold and matching multi-seed
+  training loop for the inverse problem; all hyperparameter values are
+  `None` placeholders pending the researcher transcribing the exact
+  original `heat_pinn_basic.ipynb` inverse config.
+- Moved `compute_loss` (forward-problem loss) and `train_forward` from
+  `heat_pinn_tuned.ipynb` into `pinn_shared.py`, verified byte-for-byte
+  identical to the notebook originals except for the same local
+  `import optuna` fix already applied to `train_inverse`. `pinn_shared.py`
+  now holds the complete shared "algorithm layer" (architecture, sampling,
+  losses, training loops, FD solver, CN-NLS) for both the forward and
+  inverse problems.
+- Removed a duplicate held-out test-grid construction in the
+  single-representative-run plotting cell; it now reuses the grid already
+  built in the retrain-loop cell instead of rebuilding an identical one via
+  a separate `linspace`/`meshgrid` call.
+
+Testing for all of the above was quick standalone script checks: tiny-config
+smoke tests of the new baseline loops run outside the notebook, a diff
+confirming the moved functions are byte-identical to the notebook originals
+aside from the documented `import optuna` addition, and a numerical check
+that the deduplicated test grid produces bit-for-bit identical values to the
+old duplicated construction.
+
 ## Current Uncommitted Changes
 
-None. Working tree is clean as of July 20, 2026. `methodology-cleanup` is
-several commits ahead of `origin/methodology-cleanup` and has not been
-pushed.
+None. Working tree is clean as of July 21, 2026 following this session's
+commits. `methodology-cleanup` is ahead of `origin/methodology-cleanup` and
+has not been pushed.
 
 ## Next Recommended Step
 
@@ -148,10 +187,12 @@ Pipeline inspection is complete; pick up the next item on the
 priority-ordered backlog (ordered biggest-impact first, per researcher
 preference):
 
-1. Fix inverse Optuna pruning comparing weighted loss across trials with
+1. Fill in `baseline_inverse_config` (`heat_pinn_tuned.ipynb`) with the exact
+   original `heat_pinn_basic.ipynb` inverse hyperparameters, run it, and
+   confirm both baseline numbers look sane -- this is what unblocks retiring
+   `heat_pinn_basic.ipynb` (see "Known Issues to Investigate").
+2. Fix inverse Optuna pruning comparing weighted loss across trials with
    different loss weights, or
-2. Begin the `heat_pinn_basic.ipynb` consolidation (extract baseline configs
-   into a final notebook, retire the duplicate), or
 3. Smaller polish items: `N_bc` naming clarification, `requirements.txt` and
    fleshing out `README.md`.
 
