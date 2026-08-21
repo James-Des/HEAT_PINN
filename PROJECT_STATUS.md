@@ -22,6 +22,33 @@ Prior MacBook-generated results will not be reused. All real Optuna sweeps
 and final comparisons will be run fresh on this machine so every reported
 cost line shares one consistent hardware baseline.
 
+## GPU Migration Action Items
+
+Agreed August 21, 2026, sequenced as separate small changes (each gets its
+own diff and test before moving to the next, per the Researcher Learning
+Requirement in `CLAUDE.md`). These are a prerequisite for item 5 ("run the
+real Optuna sweeps") in "Next Recommended Step" below -- no point running
+real sweeps until training actually uses the GPU.
+
+1. Add a `device` parameter to `train_forward`/`train_inverse` in
+   `pinn_shared.py`. Defaults to auto-detect (GPU if available, else CPU);
+   explicit `device="cpu"` reserved for the control-timing run. Moves the
+   model, sampled points, and (for inverse) `alpha`/observations onto the
+   resolved device. No notebook call sites need to change for normal GPU
+   runs. -- IN PROGRESS.
+2. Remove the per-iteration `.item()` GPU sync in both training loops.
+   Append `total_loss.detach()` during the loop instead of calling `.item()`
+   every step; convert to floats once at the end via
+   `torch.stack(...).cpu().tolist()`. The periodic print and Optuna-pruning
+   `.item()` calls (every 200 iters) stay as-is. Do this after Step 1 is
+   verified working. -- NOT STARTED.
+3. Set `torch.backends.cudnn.deterministic = True` inside `set_seed()` so
+   reproducible-seed runs stay reproducible on GPU (CUDA's algorithm
+   auto-selection can otherwise vary run to run). -- NOT STARTED.
+4. Generate `requirements.txt` via `pip freeze` from `.venv`. Not a code
+   change; pairs with the hardware-disclosure paragraph above. -- NOT
+   STARTED.
+
 ## Current Project State
 
 The existing PINN project has been copied into a Git repository and pushed to

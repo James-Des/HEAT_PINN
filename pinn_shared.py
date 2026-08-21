@@ -138,19 +138,25 @@ def compute_loss(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic,
     
     return total_loss, pde_loss, bc_loss, ic_loss
 
-def train_forward(forward_config, print_training=True, trial=None):
+def train_forward(forward_config, print_training=True, trial=None, device=None):
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     activation = forward_config.get("activation", "tanh")
     lambda_pde = forward_config.get("lambda_pde", 1.0)
     lambda_bc  = forward_config.get("lambda_bc",  1.0)
     lambda_ic  = forward_config.get("lambda_ic",  1.0)
 
-    model = pinn_architecture(forward_config["hidden_size"], forward_config["n_layers"], activation)
+    model = pinn_architecture(forward_config["hidden_size"], forward_config["n_layers"], activation).to(device)
 
     alpha = 0.4
 
     optimizer = torch.optim.Adam(model.parameters(), lr = forward_config["adam_lr"])
 
     x_f, t_f, x_bc, t_bc, x_ic, t_ic = sample_points(forward_config["N_f"], forward_config["N_bc"], forward_config["N_ic"])
+    x_f, t_f, x_bc, t_bc, x_ic, t_ic = (
+        x_f.to(device), t_f.to(device), x_bc.to(device), t_bc.to(device), x_ic.to(device), t_ic.to(device)
+    )
 
     N_iters = forward_config["adam_iters"]
 
@@ -222,8 +228,8 @@ def train_forward(forward_config, print_training=True, trial=None):
     # point. Without this offset, the same 1000x1000 points would both
     # choose the winning hyperparameters and report how accurate the
     # winner is, which biases the reported accuracy optimistically.
-    x_eval = torch.linspace(0.0005, 0.9995, 1000)
-    t_eval = torch.linspace(0.0005, 0.9995, 1000)
+    x_eval = torch.linspace(0.0005, 0.9995, 1000, device=device)
+    t_eval = torch.linspace(0.0005, 0.9995, 1000, device=device)
     X_eval, T_eval = torch.meshgrid(x_eval, t_eval, indexing='ij')
     x_flat = X_eval.reshape(-1, 1)
     t_flat = T_eval.reshape(-1, 1)
@@ -277,18 +283,25 @@ def compute_loss_inverse(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic, x_obs, 
     
     return total_loss, pde_loss, bc_loss, ic_loss, data_loss
 
-def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, trial=None):
+def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, trial=None, device=None):
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     activation  = inverse_config.get("activation",   "tanh")
     lambda_pde  = inverse_config.get("lambda_pde",   1.0)
     lambda_bc   = inverse_config.get("lambda_bc",    1.0)
     lambda_ic   = inverse_config.get("lambda_ic",    1.0)
     lambda_data = inverse_config.get("lambda_data",  1.0)
 
-    model = pinn_architecture(inverse_config["hidden_size"], inverse_config["n_layers"], activation)
-    alpha = nn.Parameter(torch.tensor(inverse_config["alpha_init"]))
+    model = pinn_architecture(inverse_config["hidden_size"], inverse_config["n_layers"], activation).to(device)
+    alpha = nn.Parameter(torch.tensor(inverse_config["alpha_init"], device=device))
     optimizer = torch.optim.Adam(list(model.parameters()) + [alpha], lr=inverse_config["adam_lr"])
 
     x_f, t_f, x_bc, t_bc, x_ic, t_ic = sample_points(inverse_config["N_f"], inverse_config["N_bc"], inverse_config["N_ic"])
+    x_f, t_f, x_bc, t_bc, x_ic, t_ic = (
+        x_f.to(device), t_f.to(device), x_bc.to(device), t_bc.to(device), x_ic.to(device), t_ic.to(device)
+    )
+    x_obs, t_obs, u_obs = x_obs.to(device), t_obs.to(device), u_obs.to(device)
 
     history_total = []
     history_pde = []
