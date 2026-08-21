@@ -70,15 +70,25 @@ real sweeps until training actually uses the GPU.
    320 iterations) rather than a collapsed repeated value.
 3. Set `torch.backends.cudnn.deterministic = True` inside `set_seed()` so
    reproducible-seed runs stay reproducible on GPU (CUDA's algorithm
-   auto-selection can otherwise vary run to run). -- NOT STARTED; open
-   question raised August 21, 2026 before implementing: `pinn_architecture`
-   uses only `nn.Linear` layers (no convolutions), and `cudnn.deterministic`
-   governs conv algorithm selection specifically -- it may not be the
-   lever that actually matters here. True bit-for-bit GPU reproducibility
-   for a matmul-heavy net typically needs `torch.use_deterministic_algorithms(True)`
-   plus the `CUBLAS_WORKSPACE_CONFIG` environment variable instead (or in
-   addition). Needs a real look at what actually affects this architecture
-   before implementing, not the originally-planned fix by default.
+   auto-selection can otherwise vary run to run). -- INVESTIGATED AND
+   DROPPED (August 21, 2026), not implemented. `pinn_architecture` uses
+   only `nn.Linear` layers (no convolutions), so `cudnn.deterministic`
+   governs conv algorithm selection this network never uses. Rather than
+   implement the originally-planned fix (or the stronger
+   `torch.use_deterministic_algorithms(True)` + `CUBLAS_WORKSPACE_CONFIG`
+   alternative) on schedule regardless, tested empirically first: trained
+   the same config with the same seed twice on this GPU and compared
+   results directly. Outcome was bit-for-bit identical -- same `rel_l2` to
+   the last digit, identical full loss history, identical model
+   predictions via `torch.equal()` on a fixed grid. No evidence of GPU
+   nondeterminism to fix for this architecture, so no code change was
+   made; forcing `use_deterministic_algorithms(True)` would add real risk
+   (can error on ops without a deterministic implementation, can slow
+   training) for no measured benefit. This finding is specific to this
+   machine's hardware/driver/PyTorch build (RTX 5070 Ti, driver 591.86,
+   `torch==2.11.0+cu128`) -- re-verify with the same bit-for-bit
+   double-run check if training ever moves to different hardware, rather
+   than assuming determinism still holds.
 4. Generate `requirements.txt` via `pip freeze` from `.venv`. Not a code
    change; pairs with the hardware-disclosure paragraph above. -- DONE
    (August 21, 2026), committed separately. Note for later, when
@@ -395,13 +405,12 @@ update itself is the only uncommitted change as of this write-up.
 
 ## Next Recommended Step
 
-GPU migration items 1, 2, and 4 are done and verified (see "GPU Migration
-Action Items" above); item 3 (`cudnn.deterministic`) needs a researcher
-discussion first, since `pinn_architecture` has no convolutions and the
-originally-planned fix may not be the right lever -- decide the actual
-determinism approach before implementing anything.
+All four GPU migration items are resolved (see "GPU Migration Action Items"
+above): items 1, 2, and 4 done and verified; item 3 investigated and
+deliberately dropped (empirically confirmed unnecessary for this
+architecture/hardware, not implemented).
 
-After that, pick up the next item on the priority-ordered backlog (ordered
+Pick up the next item on the priority-ordered backlog (ordered
 biggest-impact first, per researcher preference):
 
 1. Decide on the forward/inverse Optuna search-space asymmetry (notably
