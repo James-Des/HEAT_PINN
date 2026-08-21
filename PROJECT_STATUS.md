@@ -188,16 +188,15 @@ These issues have been identified but not yet corrected:
   (`pinn_infer_time`) and shown in the comparison table, but baseline's
   field evaluation happens (inside the test-error loop) without ever being
   timed, so its row in the final table is `N/A` where it should be a number.
-- New July 22, 2026: the forward and inverse Optuna search spaces differ in
-  undocumented ways -- inverse hardcodes `activation="sin"` and `N_f=10000`
-  while forward searches both; inverse's `N_bc`/`N_ic` search ranges are
-  exactly double forward's. Most notably, forward's own completed HPO run
-  shows its best trials all preferring `tanh`, but inverse never lets Optuna
-  try `tanh` at all -- if tanh is genuinely better for this PDE, inverse may
-  be leaving accuracy on the table for no documented reason. Needs a
-  deliberate decision (keep as an intentional prior and document why, or
-  widen inverse's search space to match), not a silent fix, since it changes
-  real Optuna search behavior.
+- New July 22, 2026, RESOLVED August 21, 2026: the forward and inverse
+  Optuna search spaces used to differ in undocumented ways (inverse
+  hardcoded `activation="sin"` and `N_f=10000`, and searched `N_bc`/`N_ic`
+  over double forward's range). Decided and implemented -- see "Next
+  Recommended Step" item 1 above for the full reasoning per dimension.
+  `activation`/`N_f`/`hidden_size`/`N_bc`/`N_ic` now match forward's search
+  space exactly; whether inverse specifically benefits from denser BC/IC
+  coverage is deferred to a dedicated follow-up ablation rather than left
+  as an unexamined asymmetry in the main comparison.
 - New July 22, 2026: the forward problem's true diffusivity (0.4) is a bare,
   repeated literal with no single source of truth -- hardcoded separately in
   `pinn_shared.py`'s `train_forward` (which does not read it from
@@ -413,10 +412,32 @@ architecture/hardware, not implemented).
 Pick up the next item on the priority-ordered backlog (ordered
 biggest-impact first, per researcher preference):
 
-1. Decide on the forward/inverse Optuna search-space asymmetry (notably
-   `activation` fixed to `"sin"` for inverse despite forward's own best
-   trials preferring `"tanh"`) -- a methodology call, not code cleanup (see
-   "Known Issues to Investigate").
+1. Forward/inverse Optuna search-space asymmetry -- DECIDED AND IMPLEMENTED
+   (August 21, 2026). Discussed each dimension on its merits rather than
+   picking a default: `activation` and `N_f` asymmetries had no physics
+   justification found (the original narrower inverse space was sized for
+   MacBook CPU training time, not a deliberate scientific choice, and
+   forward's own HPO run already undercuts the "sin is the right basis so
+   fix it" assumption inverse was built on); `N_bc`/`N_ic` being double
+   forward's range was the one dimension with a real candidate
+   justification (denser boundary/IC coverage could aid alpha
+   identifiability given only sparse noisy data), but that's a hypothesis,
+   not a tested finding, so it wasn't kept as an unexamined asymmetry in
+   the main comparison. `heat_pinn_tuned.ipynb` cell `d9980ad6` now has
+   `activation` (`["tanh","sin"]`), `N_f` (`[5000,10000,20000]`),
+   `hidden_size` (`[16,32,64,128]`), and `N_bc`/`N_ic` (`[100,200,400]`)
+   all matching forward's search space exactly. Verified via a scratch
+   Optuna study (tiny iteration counts) confirming both activations, all
+   three `N_f` values, and the new `N_bc` range actually get sampled, and
+   that the specific corner case that never existed in the old space
+   (`hidden_size=16`, `activation="tanh"`, `N_f=5000`, `N_bc=100`) runs
+   cleanly through `train_inverse`. Whether inverse specifically benefits
+   from denser BC/IC coverage is deferred to a dedicated follow-up
+   ablation, not resolved here. Still pending, as separate approval-gated
+   steps: deciding `n_trials` for a fresh sweep (now that each trial is far
+   cheaper on GPU, likely more than the current 100) and actually running
+   it -- widening the search space here was free (no compute), running a
+   real sweep is not.
 2. Fix inverse Optuna pruning comparing weighted loss across trials with
    different loss weights.
 3. Add baseline PINN field-evaluation timing for forward, and consolidate
