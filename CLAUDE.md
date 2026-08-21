@@ -88,6 +88,11 @@ observations for PINN and CN.
 Do not select the luckiest individual PINN run as the representative result.
 Report performance across repeated seeds or datasets.
 
+Report the hardware used for each measured cost line (CPU model for CN, GPU
+model for PINN). Running CN on CPU and PINN training/tuning on GPU is
+acceptable -- CN does not benefit from GPU parallelism at this problem size
+-- but it must be disclosed, not left implicit.
+
 ## Current Important Files
 
 - `pinn_shared.py`: shared PINN, inverse, and Crank-Nicolson functions.

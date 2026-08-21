@@ -2,13 +2,25 @@
 
 ## Last Updated
 
-July 26, 2026
+August 21, 2026
 
 ## Current Branch
 
 `methodology-cleanup`
 
 The original project is preserved on the `main` branch.
+
+## Hardware and Environment
+
+Development has moved from a CPU-only MacBook Pro to a new Windows PC with an
+NVIDIA RTX 5070 Ti (CUDA-enabled). Python 3.12 and a fresh virtual environment
+(`.venv`, gitignored) were set up on this machine on August 21, 2026, with all
+required packages installed, including CUDA-enabled `torch 2.11.0+cu128`
+(GPU detection confirmed working).
+
+Prior MacBook-generated results will not be reused. All real Optuna sweeps
+and final comparisons will be run fresh on this machine so every reported
+cost line shares one consistent hardware baseline.
 
 ## Current Project State
 
@@ -130,7 +142,14 @@ These issues have been identified but not yet corrected:
   rather than deduplicated after the fact.
 - No `requirements.txt`/environment file, and `README.md` is a single
   placeholder sentence -- a fresh clone currently has no setup instructions or
-  dependency list.
+  dependency list. Now trivial to generate via `pip freeze` from the new
+  `.venv`.
+- New August 21, 2026: Crank-Nicolson is CPU-bound (no GPU benefit at this
+  problem size) while PINN training/tuning now runs on GPU. This asymmetry is
+  acceptable if disclosed (see `CLAUDE.md`'s Experimental Integrity section,
+  updated the same day), but whether to also add a same-hardware CPU-only
+  PINN timing as a secondary control line is still an open researcher
+  decision, not yet made.
 
 These are investigation targets, not permission to change everything at once.
 
