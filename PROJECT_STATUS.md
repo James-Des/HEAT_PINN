@@ -16,7 +16,10 @@ Development has moved from a CPU-only MacBook Pro to a new Windows PC with an
 NVIDIA RTX 5070 Ti (CUDA-enabled). Python 3.12 and a fresh virtual environment
 (`.venv`, gitignored) were set up on this machine on August 21, 2026, with all
 required packages installed, including CUDA-enabled `torch 2.11.0+cu128`
-(GPU detection confirmed working).
+(GPU detection confirmed working). Git for Windows was also installed the same
+day -- only GitHub Desktop (with its own bundled, non-PATH git) was present
+before, so command-line git now works directly in a terminal/VSCode after a
+restart.
 
 Prior MacBook-generated results will not be reused. All real Optuna sweeps
 and final comparisons will be run fresh on this machine so every reported
@@ -34,20 +37,55 @@ real sweeps until training actually uses the GPU.
    `pinn_shared.py`. Defaults to auto-detect (GPU if available, else CPU);
    explicit `device="cpu"` reserved for the control-timing run. Moves the
    model, sampled points, and (for inverse) `alpha`/observations onto the
-   resolved device. No notebook call sites need to change for normal GPU
-   runs. -- IN PROGRESS.
+   resolved device. -- DONE AND VERIFIED (August 21, 2026). The initial
+   commit only updated the inside of these two functions; two call sites
+   still assumed CPU tensors and would have crashed on this GPU machine:
+   `cn_nls_baseline` called `.numpy()` directly on `x_obs`/`t_obs`/`u_obs`
+   (now GPU tensors when returned from `train_inverse`), and three cells in
+   `heat_pinn_tuned.ipynb` called a GPU-resident model on the CPU-resident
+   shared test grid. Both fixed: `cn_nls_baseline` now uses
+   `.cpu().numpy()`, and the three notebook cells move the test grid to
+   *that specific model's* actual device (via
+   `next(model.parameters()).device`, not a blanket notebook-level
+   variable) and bring the prediction back with `.cpu()` right after --
+   this specifically preserves the explicit `device="cpu"` control-timing
+   path above, which a hardcoded notebook-level device variable would have
+   broken. Verified via standalone scratch scripts covering the default-GPU
+   path, the explicit-CPU path, and `cn_nls_baseline` against GPU-resident
+   observations.
 2. Remove the per-iteration `.item()` GPU sync in both training loops.
    Append `total_loss.detach()` during the loop instead of calling `.item()`
    every step; convert to floats once at the end via
    `torch.stack(...).cpu().tolist()`. The periodic print and Optuna-pruning
-   `.item()` calls (every 200 iters) stay as-is. Do this after Step 1 is
-   verified working. -- NOT STARTED.
+   `.item()` calls (every 200 iters) stay as-is. -- DONE AND VERIFIED
+   (August 21, 2026). One subtlety found during implementation:
+   `train_inverse`'s `alpha` is a single `nn.Parameter` the optimizer
+   mutates in place every step, so `alpha.detach()` alone would make every
+   stored history entry alias the same storage and collapse the whole
+   alpha-convergence history to one repeated final value; fixed with
+   `alpha.detach().clone()` instead. The loss tensors are fresh objects
+   each iteration (not mutated in place), so plain `.detach()` is correct
+   for those. Verified via a scratch script confirming `history_alpha`
+   contains genuine per-iteration variation (319/320 unique values across
+   320 iterations) rather than a collapsed repeated value.
 3. Set `torch.backends.cudnn.deterministic = True` inside `set_seed()` so
    reproducible-seed runs stay reproducible on GPU (CUDA's algorithm
-   auto-selection can otherwise vary run to run). -- NOT STARTED.
+   auto-selection can otherwise vary run to run). -- NOT STARTED; open
+   question raised August 21, 2026 before implementing: `pinn_architecture`
+   uses only `nn.Linear` layers (no convolutions), and `cudnn.deterministic`
+   governs conv algorithm selection specifically -- it may not be the
+   lever that actually matters here. True bit-for-bit GPU reproducibility
+   for a matmul-heavy net typically needs `torch.use_deterministic_algorithms(True)`
+   plus the `CUBLAS_WORKSPACE_CONFIG` environment variable instead (or in
+   addition). Needs a real look at what actually affects this architecture
+   before implementing, not the originally-planned fix by default.
 4. Generate `requirements.txt` via `pip freeze` from `.venv`. Not a code
-   change; pairs with the hardware-disclosure paragraph above. -- NOT
-   STARTED.
+   change; pairs with the hardware-disclosure paragraph above. -- DONE
+   (August 21, 2026), committed separately. Note for later, when
+   `README.md` gets fleshed out: `torch==2.11.0+cu128` is not on plain
+   PyPI -- installing this file elsewhere needs PyTorch's CUDA index URL
+   passed explicitly, or `pip install -r requirements.txt` will fail to
+   find that exact wheel.
 
 ## Current Project State
 
@@ -350,14 +388,20 @@ notebook execution was run.
 
 ## Current Uncommitted Changes
 
-None, pending this session's commit (see "Completed Cleanup Work (July 22,
-2026)" and "(July 26, 2026)" above). `methodology-cleanup` will be ahead of
-`origin/methodology-cleanup` and not yet pushed.
+None pending code changes -- `pinn_shared.py`/`heat_pinn_tuned.ipynb` GPU
+fixes and `requirements.txt` are committed (2 commits ahead of
+`origin/methodology-cleanup`, not yet pushed). This `PROJECT_STATUS.md`
+update itself is the only uncommitted change as of this write-up.
 
 ## Next Recommended Step
 
-Pipeline inspection, reordering, and the observation-reuse fix are
-complete; pick up the next item on the priority-ordered backlog (ordered
+GPU migration items 1, 2, and 4 are done and verified (see "GPU Migration
+Action Items" above); item 3 (`cudnn.deterministic`) needs a researcher
+discussion first, since `pinn_architecture` has no convolutions and the
+originally-planned fix may not be the right lever -- decide the actual
+determinism approach before implementing anything.
+
+After that, pick up the next item on the priority-ordered backlog (ordered
 biggest-impact first, per researcher preference):
 
 1. Decide on the forward/inverse Optuna search-space asymmetry (notably
@@ -378,9 +422,12 @@ biggest-impact first, per researcher preference):
    retrain loops (a real, approval-gated training job) to get real baseline/
    tuned numbers, confirm they look sane, and only then remove
    `heat_pinn_basic.ipynb`.
-6. Smaller polish items: `N_bc` naming clarification, `requirements.txt`,
-   fleshing out `README.md`, and the minor cosmetic-only naming/comment
-   inconsistencies noted above.
+6. Smaller polish items: `N_bc` naming clarification, fleshing out
+   `README.md` (including the `torch==2.11.0+cu128` CUDA-index-URL note
+   above), the unused top-level `device` variable left over in
+   `heat_pinn_tuned.ipynb` cell `16dcba3f` now that model-evaluation code
+   reads each model's own device instead, and the minor cosmetic-only
+   naming/comment inconsistencies noted above.
 
 Revisit the deferred inverse-alpha positivity question (see "Known Issues to
 Investigate") before final results are reported.
