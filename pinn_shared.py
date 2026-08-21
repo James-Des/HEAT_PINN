@@ -176,12 +176,18 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
         
         total_loss.backward()
         optimizer.step()
-        
-        history_total.append(total_loss.item())
-        history_pde.append(pde_loss.item())
-        history_bc.append(bc_loss.item())
-        history_ic.append(ic_loss.item())
-        
+
+        # Store detached GPU tensors during the loop instead of calling
+        # .item() every iteration -- .item() forces a CPU<->GPU sync that
+        # stalls the GPU pipeline. Each of these is a fresh tensor from
+        # this iteration's forward pass (not a Parameter mutated in place),
+        # so plain .detach() is safe -- converted to floats once, in bulk,
+        # after training finishes.
+        history_total.append(total_loss.detach())
+        history_pde.append(pde_loss.detach())
+        history_bc.append(bc_loss.detach())
+        history_ic.append(ic_loss.detach())
+
         if print_training and i % 200 == 0:
             print(f"Iter {i} | Total: {total_loss.item():.4e} | PDE: {pde_loss.item():.4e} | BC: {bc_loss.item():.4e} | IC: {ic_loss.item():.4e}")
 
@@ -204,14 +210,14 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
             model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic,
             lambda_pde, lambda_bc, lambda_ic)
         total_loss.backward()
-        
-        history_total.append(total_loss.item())
-        history_pde.append(pde_loss.item())
-        history_bc.append(bc_loss.item())
-        history_ic.append(ic_loss.item())
-        
+
+        history_total.append(total_loss.detach())
+        history_pde.append(pde_loss.detach())
+        history_bc.append(bc_loss.detach())
+        history_ic.append(ic_loss.detach())
+
         lbfgs_iter[0] += 1
-        
+
         if print_training and lbfgs_iter[0] % 10 == 0:
             print(f"L-BFGS Iter {lbfgs_iter[0]} | Total: {total_loss.item():.4e} | PDE: {pde_loss.item():.4e} | BC: {bc_loss.item():.4e} | IC: {ic_loss.item():.4e}")
 
@@ -220,6 +226,14 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
     optimizer_lbfgs.step(closure)
 
     pinn_train_time = time.time() - pinn_train_start
+
+    # Convert the accumulated per-iteration loss tensors to plain floats
+    # once, in bulk, now that training is done -- a single CPU<->GPU sync
+    # instead of one every iteration.
+    history_total = torch.stack(history_total).cpu().tolist()
+    history_pde = torch.stack(history_pde).cpu().tolist()
+    history_bc = torch.stack(history_bc).cpu().tolist()
+    history_ic = torch.stack(history_ic).cpu().tolist()
 
     # Validation grid for HPO/model-selection (Optuna objective + the
     # top-configs retrain loop below) -- offset by half a grid cell from
@@ -320,12 +334,21 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
         total_loss.backward()
         optimizer.step()
 
-        history_total.append(total_loss.item())
-        history_pde.append(pde_loss.item())
-        history_bc.append(bc_loss.item())
-        history_ic.append(ic_loss.item())
-        history_data.append(data_loss.item())
-        history_alpha.append(alpha.item())
+        # Store detached GPU tensors during the loop instead of calling
+        # .item() every iteration -- .item() forces a CPU<->GPU sync that
+        # stalls the GPU pipeline. The loss tensors are fresh objects from
+        # this iteration's forward pass, so plain .detach() is safe. alpha
+        # is different: it's the SAME nn.Parameter the optimizer mutates
+        # in place every step, so .detach() alone would make every stored
+        # entry alias the same storage and collapse to one repeated final
+        # value -- .clone() is required to actually snapshot each step's
+        # value. Converted to floats once, in bulk, after training finishes.
+        history_total.append(total_loss.detach())
+        history_pde.append(pde_loss.detach())
+        history_bc.append(bc_loss.detach())
+        history_ic.append(ic_loss.detach())
+        history_data.append(data_loss.detach())
+        history_alpha.append(alpha.detach().clone())
 
         if print_training and i % 200 == 0:
             print(f"Iter {i} | Total: {total_loss.item():.4e} | PDE: {pde_loss.item():.4e} | BC: {bc_loss.item():.4e} | IC: {ic_loss.item():.4e} | Alpha: {alpha.item():.4f}")
@@ -350,12 +373,12 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
             lambda_pde, lambda_bc, lambda_ic, lambda_data)
         total_loss.backward()
 
-        history_total.append(total_loss.item())
-        history_pde.append(pde_loss.item())
-        history_bc.append(bc_loss.item())
-        history_ic.append(ic_loss.item())
-        history_data.append(data_loss.item())
-        history_alpha.append(alpha.item())
+        history_total.append(total_loss.detach())
+        history_pde.append(pde_loss.detach())
+        history_bc.append(bc_loss.detach())
+        history_ic.append(ic_loss.detach())
+        history_data.append(data_loss.detach())
+        history_alpha.append(alpha.detach().clone())
 
         lbfgs_iter[0] += 1
         if print_training and lbfgs_iter[0] % 10 == 0:
@@ -380,6 +403,17 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
               f"This may indicate early convergence (fine) or a degenerate step (worth checking).")
 
     inverse_train_time = time.time() - inverse_train_start
+
+    # Convert the accumulated per-iteration tensors to plain floats once,
+    # in bulk, now that training is done -- a single CPU<->GPU sync
+    # instead of one every iteration.
+    history_total = torch.stack(history_total).cpu().tolist()
+    history_pde = torch.stack(history_pde).cpu().tolist()
+    history_bc = torch.stack(history_bc).cpu().tolist()
+    history_ic = torch.stack(history_ic).cpu().tolist()
+    history_data = torch.stack(history_data).cpu().tolist()
+    history_alpha = torch.stack(history_alpha).cpu().tolist()
+
     print(f"\nTotal training time: {inverse_train_time:.2f}s")
     print(f"Recovered alpha: {alpha.item():.6f} | True alpha: {inverse_config['true_alpha']} | Error: {abs(alpha.item() - inverse_config['true_alpha']):.6f}")
 
@@ -452,13 +486,13 @@ def cn_nls_baseline(inverse_config, x_obs, t_obs, u_obs):
         interp = RegularGridInterpolator((x, t), u_guess)
         
         obs_points = np.column_stack([
-            x_obs.numpy().flatten(),
-            t_obs.numpy().flatten()
+            x_obs.cpu().numpy().flatten(),
+            t_obs.cpu().numpy().flatten()
             ])
-        
+
         u_predicted = interp(obs_points)
-        
-        mse = np.mean((u_predicted - u_obs.numpy().flatten())**2)
+
+        mse = np.mean((u_predicted - u_obs.cpu().numpy().flatten())**2)
         
         mse_history.append(mse)
     
