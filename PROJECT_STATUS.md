@@ -438,10 +438,12 @@ notebook execution was run.
 
 ## Current Uncommitted Changes
 
-None pending code changes -- `pinn_shared.py`/`heat_pinn_tuned.ipynb` GPU
-fixes and `requirements.txt` are committed (2 commits ahead of
-`origin/methodology-cleanup`, not yet pushed). This `PROJECT_STATUS.md`
-update itself is the only uncommitted change as of this write-up.
+None pending code changes -- all GPU-migration, search-space, pruning,
+timing/consolidation, and alpha-positivity fixes are committed (8 commits
+ahead of `origin/methodology-cleanup` as of this write-up, not yet
+pushed). `requirements.txt` was regenerated a second time today after
+installing `scikit-learn` (see item 7 below) and is part of this same
+uncommitted batch alongside this `PROJECT_STATUS.md` update.
 
 ## Next Recommended Step
 
@@ -559,6 +561,32 @@ biggest-impact first, per researcher preference):
    `heat_pinn_tuned.ipynb` cell `16dcba3f` now that model-evaluation code
    reads each model's own device instead, and the minor cosmetic-only
    naming/comment inconsistencies noted above.
+7. Pre-real-sweep notebook integration check -- DONE (August 21, 2026).
+   Everything above (items 1-4, plus the GPU-migration and alpha-positivity
+   fixes) had only ever been verified via standalone scratch scripts
+   calling `pinn_shared.py` functions directly -- `heat_pinn_tuned.ipynb`
+   itself had not actually been executed top to bottom even once this
+   session, so notebook-level integration bugs (stale cell references,
+   execution-order issues) could not have been caught by any of that
+   testing. Ran a reduced-scale dry run instead: a scratchpad copy of the
+   notebook with `n_trials=3` and drastically cut iteration counts, its own
+   distinctly-named Optuna storage/pickle files (so it could never collide
+   with or overwrite the real ones -- confirmed none existed yet anyway),
+   executed via `jupyter nbconvert --execute`. Found one real bug this way:
+   `scikit-learn` was missing from `.venv`, needed internally by
+   `optuna.visualization.plot_param_importances()` -- without this check,
+   the real 300-trial sweep would have crashed at that exact cell *after*
+   the full ~1.5-2 hour search completed, before any retrain/comparison
+   cells ever ran. Installed `scikit-learn` and re-ran; the full notebook
+   then executed with zero errors end to end (verified by scanning every
+   cell's outputs for error-type entries -- none found), both final
+   Baseline/Tuned/(FD or CN-NLS) comparison tables printed completely, and
+   the FD solver and CN-NLS (unaffected by the iteration-count reduction,
+   since neither depends on gradient-based training) produced properly
+   accurate results -- FD rel L2 error `3.3e-07`, CN-NLS recovered
+   `alpha=0.413` against `true_alpha=0.4` -- confirming those code paths
+   are solid independent of this session's PINN-side changes.
+   `requirements.txt` regenerated afterward to include `scikit-learn`.
 
 ## Suggested First Message to Claude
 
