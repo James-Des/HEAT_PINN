@@ -324,8 +324,14 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
     lambda_data = inverse_config.get("lambda_data",  1.0)
 
     model = pinn_architecture(inverse_config["hidden_size"], inverse_config["n_layers"], activation).to(device)
-    alpha = nn.Parameter(torch.tensor(inverse_config["alpha_init"], device=device))
-    optimizer = torch.optim.Adam(list(model.parameters()) + [alpha], lr=inverse_config["adam_lr"])
+    # log_alpha, not alpha, is the actual learnable parameter -- this
+    # guarantees the physical diffusivity (exp(log_alpha), computed fresh
+    # wherever alpha is needed below) can never go negative or hit zero,
+    # for any value log_alpha takes during optimization. inverse_config
+    # ["alpha_init"] is still the physical initial guess (must stay > 0);
+    # only its log is what actually gets optimized.
+    log_alpha = nn.Parameter(torch.log(torch.tensor(inverse_config["alpha_init"], device=device)))
+    optimizer = torch.optim.Adam(list(model.parameters()) + [log_alpha], lr=inverse_config["adam_lr"])
 
     x_f, t_f, x_bc, t_bc, x_ic, t_ic = sample_points(inverse_config["N_f"], inverse_config["N_bc"], inverse_config["N_ic"])
     x_f, t_f, x_bc, t_bc, x_ic, t_ic = (
@@ -344,6 +350,10 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
 
     for i in range(1, inverse_config["adam_iters"] + 1):
         optimizer.zero_grad()
+        # Recomputed fresh every iteration from the current log_alpha, so
+        # autograd traces through exp() correctly and the physical value
+        # used in the physics loss always reflects the latest update.
+        alpha = torch.exp(log_alpha)
         total_loss, pde_loss, bc_loss, ic_loss, data_loss = compute_loss_inverse(
             model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic, x_obs, t_obs, u_obs,
             lambda_pde, lambda_bc, lambda_ic, lambda_data)
@@ -354,11 +364,13 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
         # .item() every iteration -- .item() forces a CPU<->GPU sync that
         # stalls the GPU pipeline. The loss tensors are fresh objects from
         # this iteration's forward pass, so plain .detach() is safe. alpha
-        # is different: it's the SAME nn.Parameter the optimizer mutates
-        # in place every step, so .detach() alone would make every stored
-        # entry alias the same storage and collapse to one repeated final
-        # value -- .clone() is required to actually snapshot each step's
-        # value. Converted to floats once, in bulk, after training finishes.
+        # is now also a fresh tensor each iteration (torch.exp allocates
+        # new storage, it does not return a view into log_alpha), so it no
+        # longer aliases anything the optimizer mutates in place the way
+        # the raw Parameter used to -- .clone() is technically no longer
+        # required here, but kept anyway for defensive consistency with
+        # the same pattern used everywhere else in this loop. Converted to
+        # floats once, in bulk, after training finishes.
         history_total.append(total_loss.detach())
         history_pde.append(pde_loss.detach())
         history_bc.append(bc_loss.detach())
@@ -397,11 +409,15 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
 
     adam_iters = len(history_total)
 
-    optimizer_lbfgs = torch.optim.LBFGS(list(model.parameters()) + [alpha], lr=1.0, max_iter=inverse_config["lbfgs_iters"])
+    optimizer_lbfgs = torch.optim.LBFGS(list(model.parameters()) + [log_alpha], lr=1.0, max_iter=inverse_config["lbfgs_iters"])
     lbfgs_iter = [0]
 
     def closure():
         optimizer_lbfgs.zero_grad()
+        # Local to this closure -- does NOT update the outer-scope `alpha`
+        # below, since a plain `=` inside a nested function creates its own
+        # local binding rather than reaching back into the enclosing scope.
+        alpha = torch.exp(log_alpha)
         total_loss, pde_loss, bc_loss, ic_loss, data_loss = compute_loss_inverse(
             model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic, x_obs, t_obs, u_obs,
             lambda_pde, lambda_bc, lambda_ic, lambda_data)
@@ -421,6 +437,14 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
 
     optimizer_lbfgs.step(closure)
 
+    # Recompute alpha from the final log_alpha now that L-BFGS is done.
+    # Without this, alpha would still be whatever it was at the end of the
+    # Adam loop above -- the closure's alpha is scoped to the closure only
+    # (see comment there) and never updates this name, so every L-BFGS
+    # step would otherwise be silently ignored by everything below
+    # (the diagnostic, the final print, and the returned "alpha" value).
+    alpha = torch.exp(log_alpha)
+
     # --- DIAGNOSTIC (new): flag suspiciously early L-BFGS termination ---
     # PyTorch's LBFGS can legitimately stop in a handful of calls if
     # tolerance_grad/tolerance_change are satisfied immediately, but a
@@ -428,8 +452,12 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
     # look rather than silently trusting the result.
     if lbfgs_iter[0] < 10:
         grads = [p.grad.flatten() for p in model.parameters() if p.grad is not None]
-        if alpha.grad is not None:
-            grads.append(alpha.grad.flatten())
+        # log_alpha, not alpha: alpha here was just recomputed fresh above
+        # and never participated in a backward() call itself, so it has no
+        # .grad populated -- log_alpha is the actual leaf Parameter that
+        # accumulates gradients.
+        if log_alpha.grad is not None:
+            grads.append(log_alpha.grad.flatten())
         final_grad_norm = torch.norm(torch.cat(grads)).item() if grads else float('nan')
         print(f"[warning] L-BFGS stopped after only {lbfgs_iter[0]} closure call(s) "
               f"(configured for up to {inverse_config['lbfgs_iters']}). "

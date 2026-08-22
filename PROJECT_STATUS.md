@@ -150,12 +150,53 @@ These issues have been identified but not yet corrected:
   model init still share global RNG state, which is normal/acceptable
   training-procedure stochasticity rather than a fairness bug, per July 20
   discussion.
-- The inverse PINN diffusivity is not constrained to remain positive or within
-  the CN search range. Discussed and intentionally deferred July 20, 2026: a
-  `log(alpha)` reparameterization was proposed and rejected as too large a
-  change to how the central estimated quantity is optimized; a lighter
-  clamp-based safety net was also proposed and deferred. Revisit before final
-  results are reported.
+- RESOLVED August 21, 2026: the inverse PINN diffusivity used to not be
+  constrained to remain positive. Revisited the July 20, 2026 rejection of
+  `log(alpha)` reparameterization after discussing the concrete trade-off
+  (it changes alpha's optimization geometry -- a fixed `adam_lr` produces
+  a step in alpha-space that scales with alpha's current magnitude, rather
+  than the previous fixed absolute step size -- but does not invalidate
+  any existing committed results, since inverse has not had a completed
+  real sweep yet); decided the guarantee (alpha can no longer go negative
+  or hit zero under any value the optimizer takes) was worth that
+  trade-off, in preference to the other options considered (a soft
+  penalty term, which needs a new hyperparameter and only discourages
+  rather than guarantees; a hard clamp, which is non-differentiable and
+  can hide how far an optimizer actually wanted to diverge; detect-and-
+  flag only, which does not prevent wasted compute on a doomed run).
+  `train_inverse` in `pinn_shared.py` now optimizes `log_alpha` (a new
+  `nn.Parameter`, initialized from `torch.log(inverse_config["alpha_init"])`)
+  instead of `alpha` directly; the physical diffusivity is recomputed as
+  `torch.exp(log_alpha)` wherever needed. A real subtlety surfaced during
+  implementation: the L-BFGS closure computes its own local `alpha =
+  torch.exp(log_alpha)`, which is scoped to the closure and does NOT
+  update the outer-scope `alpha` used after `optimizer_lbfgs.step(closure)`
+  returns (a plain `=` inside a nested function creates its own local
+  binding rather than reaching back into the enclosing scope) -- without
+  an explicit `alpha = torch.exp(log_alpha)` recomputed in the outer scope
+  immediately after L-BFGS finishes, every L-BFGS update to alpha would
+  have been silently discarded, with the returned "alpha" permanently
+  stuck at whatever it was at the end of the Adam phase. Fixed by adding
+  that recompute, and by switching the post-L-BFGS diagnostic's gradient
+  check from `alpha.grad` to `log_alpha.grad` (the freshly-recomputed
+  `alpha` never itself participates in a `backward()` call, so it has no
+  `.grad` populated -- `log_alpha` is the actual leaf Parameter that
+  accumulates gradients). No API/return-shape changes: `train_inverse`
+  still returns `"alpha"` as a plain float and `"history_alpha"` as a list
+  of floats representing the physical (not log-space) value, so no
+  notebook call sites needed to change.
+  Verified via three scratch-script checks: (1) under a deliberately
+  aggressive learning rate designed to destabilize a raw-alpha
+  parameterization, alpha stayed strictly positive across all 300+
+  recorded values even as it was driven down to ~0.004 -- confirming the
+  positivity guarantee holds even in an adversarial case; (2) an isolated,
+  well-conditioned synthetic probe (a trivial closure + a single L-BFGS
+  step) confirmed the outer-scope recompute genuinely picks up the
+  closure's optimizer update (0.1 -> 0.138), independent of whether real
+  training happens to produce a large enough gradient to see the effect
+  at limited float precision; (3) a normal-scale run recovered
+  alpha=0.377 against true_alpha=0.4, confirming ordinary convergence
+  behavior is unaffected.
 - RESOLVED August 21, 2026 (see "Next Recommended Step" item 2 above for the
   full reasoning): Optuna pruning used to compare weighted training loss
   even though the loss weights vary between trials. Forward now prunes on
@@ -518,9 +559,6 @@ biggest-impact first, per researcher preference):
    `heat_pinn_tuned.ipynb` cell `16dcba3f` now that model-evaluation code
    reads each model's own device instead, and the minor cosmetic-only
    naming/comment inconsistencies noted above.
-
-Revisit the deferred inverse-alpha positivity question (see "Known Issues to
-Investigate") before final results are reported.
 
 ## Suggested First Message to Claude
 
