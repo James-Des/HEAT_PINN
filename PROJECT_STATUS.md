@@ -577,6 +577,57 @@ biggest-impact first, per researcher preference):
      `0.01 -> 0.1 -> 0.2`) and falling with more observations
      (`0.036 -> 0.010 -> 0.008` as `N_obs` went `10 -> 25 -> 100`),
      confirming the sweep mechanics are wired correctly.
+   - Extended with a third and fourth sweep (August 21, 2026): `true_alpha`
+     sensitivity for BOTH forward and inverse, using the identical value
+     set `[0.1, 0.4, 0.7, 1.0]` in each so the two problems' results are
+     directly comparable. Forward's own robustness had zero sensitivity
+     analysis before this -- the added value is testing whether "is
+     PINN-tuning worth it" holds generally, or is an artifact of the one
+     `true_alpha=0.4` value everything else in the notebook reports.
+     - Forward sweep (cell `5f58a1ce`, inserted right after `e3e8d970`):
+       freezes the winning forward config (`top_configs[best_config_idx]`),
+       retrains 5 seeds per non-default alpha value, compares against FD
+       (which needs no retraining -- `fd_solver` takes `alpha` directly).
+       Seeds 20-24, chosen for readability only -- forward has no shared-
+       dataset leakage risk the way inverse does.
+     - Inverse sweep (cell `69c40d92`, appended last): freezes
+       `winning_inverse_config`, changing only `true_alpha` per point --
+       `alpha_init` deliberately stays fixed at its already-tuned value
+       (0.1) rather than scaling with the swept alpha, since a real
+       deployment of this tuned recipe on a genuinely different
+       diffusivity would not know to adjust `alpha_init` either; keeping
+       it fixed is the realistic generalization test, not an unfair
+       handicap. Sweep values must stay within CN-NLS's fixed `[0.01, 1.0]`
+       search range for CN-NLS to have any chance of finding them (all
+       four values do). Seeds 21-25.
+     - Both reuse the already-computed `true_alpha=0.4` results instead of
+       retraining a duplicate of the identical experiment, same pattern as
+       the noise/N_obs sweeps.
+     - Confirmed in passing while discussing this: the "test top
+       candidates across several seeds, pick winner by mean performance"
+       selection method the researcher asked about was already implemented
+       for both problems (`top_configs`/`top_inverse_configs` cells,
+       already top-3 x 5 seeds each) -- kept at top-3, not bumped to 5, per
+       researcher choice.
+     - Verified via a third reduced-scale dry run. Notable tooling wrinkle:
+       the notebook has grown too large for the Read tool to process in
+       one call (needed by `NotebookEdit`), so this dry run's scratch copy
+       was prepared by directly rewriting cell sources via a Python/json
+       script instead of `NotebookEdit`, bypassing that limit -- same
+       reduction edits as before, applied to a throwaway file outside the
+       repo, not a change to how the real notebook is edited. Zero errors
+       across the whole notebook. Forward: FD's error stayed tiny
+       regardless of alpha (`~1e-7` to `~1e-6`) as expected, confirming FD
+       needs no retraining to adapt to a new diffusivity. Inverse: with
+       `alpha_init` fixed and training deliberately starved for dry-run
+       speed, the recovered alpha barely moved off its `0.1` starting
+       point at each test value, producing `alpha_error ~= |0.1 -
+       true_alpha|` almost exactly (`~0.600` at `true_alpha=0.7`, `~0.900`
+       at `true_alpha=1.0`) -- exactly the expected behavior for a network
+       given no real chance to converge, confirming `true_alpha` is
+       correctly threaded through both `generate_noisy_data` and
+       `train_inverse`'s config while `alpha_init` correctly stays fixed
+       as designed.
 5. Once the above are settled: actually run the real Optuna sweeps and
    retrain loops (a real, approval-gated training job) to get real baseline/
    tuned numbers, confirm they look sane, and only then remove
