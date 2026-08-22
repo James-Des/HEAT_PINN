@@ -547,10 +547,36 @@ biggest-impact first, per researcher preference):
    alpha=0.7 exact solution (not 0.4) at a held-out point, and confirmed
    omitting `true_alpha` from a config now raises `KeyError` instead of
    silently keeping the old hardcoded value.
-4. Build the planned sensitivity sweeps -- vary `noise_std` at fixed
-   `N_obs`, and vary `N_obs` at fixed `noise_std` -- comparing the tuned
-   PINN and CN-NLS at each point. `INVERSE_OBS_CONFIG` is already factored
-   out specifically to support this.
+4. Sensitivity sweeps -- DONE AND VERIFIED (August 21, 2026). Added ahead
+   of the real sweep, not after, since both sweeps need `winning_inverse_config`
+   (the frozen config the confirmation round selects) as input and so can
+   only run after the main inverse search anyway -- bundling them into the
+   same session avoids a second GPU commitment later just to reload the
+   winning config. Two new cells appended after `9098ed9d` in
+   `heat_pinn_tuned.ipynb`:
+   - Noise sweep (cell `157f354e`): `noise_std` in `[0.01, 0.05, 0.1, 0.2]`
+     at fixed `N_obs=50`.
+   - N_obs sweep (cell `1b6c3646`): `N_obs` in `[10, 25, 50, 100]` at fixed
+     `noise_std=0.05`.
+   - Both freeze `winning_inverse_config` rather than re-tuning per point
+     (testing robustness of the already-selected config to noise/N_obs,
+     not re-running the expensive HPO search 4 more times each), run 5
+     seeds per point with both tuned PINN and CN-NLS, and reuse the
+     already-computed final-evaluation/CN-NLS results for each sweep's
+     default point (`noise_std=0.05`/`N_obs=50`) instead of retraining a
+     duplicate of the identical experiment. Seed ranges kept disjoint from
+     every other stage and from each other: search=0, confirmation=1-5,
+     final-eval=6-10, noise sweep=11-15, N_obs sweep=16-20.
+   - Verified via a second reduced-scale notebook dry run (same
+     methodology as item 7 below): both sweeps executed with zero errors,
+     the default-point reuse logic triggered exactly once per sweep as
+     intended, and CN-NLS's accuracy (unaffected by the dry run's
+     iteration-count reduction, since it doesn't depend on gradient-based
+     training) showed the expected physical trends -- alpha error rising
+     with noise (`0.003 -> 0.041 -> 0.080` as `noise_std` went
+     `0.01 -> 0.1 -> 0.2`) and falling with more observations
+     (`0.036 -> 0.010 -> 0.008` as `N_obs` went `10 -> 25 -> 100`),
+     confirming the sweep mechanics are wired correctly.
 5. Once the above are settled: actually run the real Optuna sweeps and
    retrain loops (a real, approval-gated training job) to get real baseline/
    tuned numbers, confirm they look sane, and only then remove
@@ -587,6 +613,9 @@ biggest-impact first, per researcher preference):
    `alpha=0.413` against `true_alpha=0.4` -- confirming those code paths
    are solid independent of this session's PINN-side changes.
    `requirements.txt` regenerated afterward to include `scikit-learn`.
+   Repeated a second time after adding the sensitivity-sweep cells (item 4
+   above), since those were new, never-executed code -- that pass also
+   completed with zero errors.
 
 ## Suggested First Message to Claude
 
