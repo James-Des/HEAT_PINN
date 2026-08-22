@@ -185,12 +185,10 @@ These issues have been identified but not yet corrected:
   either earlier stage, and this is what gets reported and compared against
   CN-NLS) -- so no single dataset both selects a winner and reports its
   accuracy.
-- New July 22, 2026: baseline PINN field-evaluation time is never measured
-  for the forward problem. `CLAUDE.md` requires reporting PINN
-  field-evaluation time as its own cost line; the tuned model's is measured
-  (`pinn_infer_time`) and shown in the comparison table, but baseline's
-  field evaluation happens (inside the test-error loop) without ever being
-  timed, so its row in the final table is `N/A` where it should be a number.
+- RESOLVED August 21, 2026 (see "Next Recommended Step" item 3 above):
+  baseline PINN field-evaluation time used to never be measured for the
+  forward problem. Now timed per seed and reported as mean ± std, both in
+  the baseline section's printout and in the final comparison table.
 - New July 22, 2026, RESOLVED August 21, 2026: the forward and inverse
   Optuna search spaces used to differ in undocumented ways (inverse
   hardcoded `activation="sin"` and `N_f=10000`, and searched `N_bc`/`N_ic`
@@ -200,14 +198,13 @@ These issues have been identified but not yet corrected:
   space exactly; whether inverse specifically benefits from denser BC/IC
   coverage is deferred to a dedicated follow-up ablation rather than left
   as an unexamined asymmetry in the main comparison.
-- New July 22, 2026: the forward problem's true diffusivity (0.4) is a bare,
-  repeated literal with no single source of truth -- hardcoded separately in
-  `pinn_shared.py`'s `train_forward` (which does not read it from
-  `forward_config` at all), in `heat_pinn_tuned.ipynb`'s grid cell, and again
-  in the final FD-vs-PINN comparison cell. Compare to inverse, where
-  `true_alpha` lives once in `INVERSE_FIXED_CONFIG`. Fixing this means
-  changing `train_forward`'s signature in `pinn_shared.py`, so it's a real
-  change requiring approval, not a trivial one.
+- RESOLVED August 21, 2026 (see "Next Recommended Step" item 3 above): the
+  forward problem's true diffusivity (0.4) used to be a bare, repeated
+  literal with no single source of truth across `pinn_shared.py`'s
+  `train_forward`, the notebook's grid cell, and the FD-vs-PINN comparison
+  cell. `train_forward` now reads `forward_config["true_alpha"]`, and all
+  three call sites reference `forward_config["true_alpha"]`/
+  `FORWARD_FIXED_CONFIG["true_alpha"]` instead of a bare `0.4`.
 - Minor, low-priority cosmetic-only inconsistencies noticed July 22, 2026
   (not correctness issues): `FORWARD_FIXED_CONFIG["lambda_pde"]` is an int
   (`1`) while `INVERSE_FIXED_CONFIG["lambda_pde"]` is a float (`1.0`),
@@ -489,10 +486,24 @@ biggest-impact first, per researcher preference):
      pruned, 4/10 inverse trials pruned), all reported intermediate values
      are finite, and completed trials' windowed values decline over
      training as expected.
-3. Add baseline PINN field-evaluation timing for forward, and consolidate
-   the forward problem's hardcoded true-diffusivity literal (0.4) the same
-   way `INVERSE_FIXED_CONFIG["true_alpha"]` already does for inverse (touches
-   `train_forward`'s signature in `pinn_shared.py`).
+3. Baseline PINN field-evaluation timing + true-diffusivity consolidation --
+   DONE AND VERIFIED (August 21, 2026). `train_forward` now reads
+   `forward_config["true_alpha"]` instead of a hardcoded `alpha = 0.4`
+   (matching how `train_inverse` already requires `inverse_config["true_alpha"]`);
+   `forward_config` and `FORWARD_FIXED_CONFIG` in `heat_pinn_tuned.ipynb`
+   both carry `"true_alpha": 0.4` (mirroring how `INVERSE_OBS_CONFIG` and
+   `INVERSE_FIXED_CONFIG` both already carry inverse's), and the two
+   remaining bare `0.4` literals (the held-out test grid's exact solution,
+   the FD-vs-PINN comparison's exact solution) now read from
+   `forward_config["true_alpha"]` instead. Baseline's field-evaluation
+   time is now measured per seed (previously un-timed, printing `N/A` in
+   the final table) and reported as its own mean ± std cost line, both in
+   the baseline section's own printout and as a new row in the final
+   Baseline/Tuned/FD comparison table. Verified via a scratch script:
+   confirmed a model trained with `true_alpha=0.7` actually tracks the
+   alpha=0.7 exact solution (not 0.4) at a held-out point, and confirmed
+   omitting `true_alpha` from a config now raises `KeyError` instead of
+   silently keeping the old hardcoded value.
 4. Build the planned sensitivity sweeps -- vary `noise_std` at fixed
    `N_obs`, and vary `N_obs` at fixed `noise_std` -- comparing the tuned
    PINN and CN-NLS at each point. `INVERSE_OBS_CONFIG` is already factored

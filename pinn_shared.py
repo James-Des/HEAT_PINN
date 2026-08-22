@@ -149,7 +149,7 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
 
     model = pinn_architecture(forward_config["hidden_size"], forward_config["n_layers"], activation).to(device)
 
-    alpha = 0.4
+    alpha = forward_config["true_alpha"]
 
     optimizer = torch.optim.Adam(model.parameters(), lr = forward_config["adam_lr"])
 
