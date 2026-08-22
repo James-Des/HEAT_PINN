@@ -195,7 +195,23 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
             import optuna  # local import: only needed on this path, and must be
                             # bound in this module now that train_forward no longer
                             # lives in the same notebook namespace as `import optuna`
-            trial.report(total_loss.item(), i)
+            # Report the UNWEIGHTED physics/boundary/initial residual,
+            # averaged over the preceding 200 iterations, instead of the
+            # single-instant weighted total_loss. Unweighted because
+            # lambda_bc/lambda_ic are searched per-trial over a huge
+            # log-uniform range, so comparing raw weighted total_loss
+            # across trials compares numbers that differ for reasons
+            # having nothing to do with fit quality. Windowed (not just
+            # the instantaneous value at this step) because a single
+            # noisy reading can unfairly prune a trial that's mid-
+            # fluctuation rather than genuinely behind -- averaging over
+            # the last 200 iterations only flags trials that are
+            # persistently worse, not momentarily unlucky.
+            window_pde = torch.stack(history_pde[-200:])
+            window_bc = torch.stack(history_bc[-200:])
+            window_ic = torch.stack(history_ic[-200:])
+            unweighted_avg = (window_pde + window_bc + window_ic).mean().item()
+            trial.report(unweighted_avg, i)
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
 
@@ -357,7 +373,25 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
             import optuna  # local import: only needed on this path, and must be
                             # bound in this module now that train_inverse no longer
                             # lives in the same notebook namespace as `import optuna`
-            trial.report(total_loss.item(), i)
+            # Report alpha error (the SAME quantity objective_inverse
+            # ultimately selects the winning trial on), averaged over the
+            # preceding 200 iterations, instead of weighted total_loss.
+            # Not the unweighted physics/boundary/initial/data residual
+            # either: the PDE residual alone cannot distinguish a
+            # correctly-identified alpha from a self-consistent but wrong
+            # one (a flexible enough network can satisfy the PDE for the
+            # wrong alpha too), and data_loss -- the one term that actually
+            # disambiguates alpha -- would just be one of several equally-
+            # weighted terms in an unweighted sum, with no guarantee it
+            # carries enough influence to matter. alpha_error sidesteps
+            # that identifiability gap by measuring the thing we actually
+            # care about directly. Windowed for the same reason as
+            # forward: a single instant can be unlucky (alpha does not
+            # move monotonically), so average over the last 200 iterations
+            # to only flag trials that are persistently off.
+            window_alpha = torch.stack(history_alpha[-200:])
+            alpha_error_avg = (window_alpha - inverse_config["true_alpha"]).abs().mean().item()
+            trial.report(alpha_error_avg, i)
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
 

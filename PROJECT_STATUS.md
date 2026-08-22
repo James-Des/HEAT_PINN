@@ -156,8 +156,11 @@ These issues have been identified but not yet corrected:
   change to how the central estimated quantity is optimized; a lighter
   clamp-based safety net was also proposed and deferred. Revisit before final
   results are reported.
-- Optuna pruning uses weighted training loss even though the loss weights vary
-  between trials.
+- RESOLVED August 21, 2026 (see "Next Recommended Step" item 2 above for the
+  full reasoning): Optuna pruning used to compare weighted training loss
+  even though the loss weights vary between trials. Forward now prunes on
+  a windowed-average unweighted residual; inverse now prunes on a
+  windowed-average alpha error.
 - `N_bc` represents points per boundary, so the actual total is twice the
   configuration value.
 - `heat_pinn_basic.ipynb` does not currently run cleanly from top to bottom and
@@ -438,8 +441,54 @@ biggest-impact first, per researcher preference):
    cheaper on GPU, likely more than the current 100) and actually running
    it -- widening the search space here was free (no compute), running a
    real sweep is not.
-2. Fix inverse Optuna pruning comparing weighted loss across trials with
-   different loss weights.
+2. Optuna pruning signal -- DECIDED AND IMPLEMENTED (August 21, 2026).
+   Original problem: pruning compared weighted `total_loss` across trials,
+   but `lambda_bc`/`lambda_ic`/(`lambda_data` for inverse) are themselves
+   searched per-trial over a huge log-uniform range (0.001-1000), so
+   raw weighted-loss magnitudes are not comparable between trials for
+   reasons having nothing to do with fit quality.
+   - Forward now reports the UNWEIGHTED physics/boundary/initial residual
+     (`pde_loss + bc_loss + ic_loss`), averaged over the preceding 200
+     iterations rather than a single instantaneous reading. Sufficient for
+     forward because there is no unknown parameter to identify -- a low
+     residual and a correct solution are the same thing.
+   - Inverse deliberately does NOT use the same unweighted-sum approach,
+     despite the appeal of symmetry: the PDE residual alone cannot
+     distinguish a correctly-identified alpha from a self-consistent but
+     wrong one (a flexible enough network can satisfy the PDE for the
+     wrong alpha too), and `data_loss` -- the one term that actually
+     disambiguates alpha -- would just be one of several equally-weighted
+     terms in an unweighted sum, with no guarantee it carries enough
+     influence to matter. Inverse instead reports `alpha_error`
+     (`abs(alpha - true_alpha)`), windowed the same way -- the same
+     quantity `objective_inverse` already uses to pick the winning trial,
+     evaluated progressively instead of only at the end.
+   - Considered and explicitly rejected using `alpha_error` purely because
+     it uses `true_alpha`, which a real deployment would not have: this
+     does not compound that concern, since pruning only decides which
+     trials get cut short to save compute -- it does not determine which
+     config wins (the final objective already uses `alpha_error`
+     regardless of what pruning does), so pruning on the same signal
+     doesn't add a new channel for ground truth to influence the result,
+     it just reaches the same eventual answer faster. Whether the
+     top-level inverse objective itself should move to a ground-truth-free
+     criterion (e.g., held-out noisy-data fit) instead of `alpha_error` is
+     a separate, bigger methodology question, logged but not decided here.
+   - Windowing (200-iteration rolling average, not the instantaneous value
+     at each checkpoint) applied to both, so a trial only gets flagged as
+     bad if persistently worse across the whole window, not because it was
+     caught at one noisy/non-monotonic instant -- alpha in particular does
+     not move monotonically during training (confirmed in an earlier
+     scratch test). Windowing reuses the per-iteration GPU tensors already
+     being accumulated in `history_*` (from the `.item()`-removal fix
+     above), so it adds no extra CPU<->GPU syncs beyond the existing one
+     per 200-iteration checkpoint.
+   - Verified via a scratch Optuna study (10 trials each, deliberately wide
+     learning-rate range to force some trials to be clearly worse):
+     pruning actually triggers for both problems (6/10 forward trials
+     pruned, 4/10 inverse trials pruned), all reported intermediate values
+     are finite, and completed trials' windowed values decline over
+     training as expected.
 3. Add baseline PINN field-evaluation timing for forward, and consolidate
    the forward problem's hardcoded true-diffusivity literal (0.4) the same
    way `INVERSE_FIXED_CONFIG["true_alpha"]` already does for inverse (touches
