@@ -27,75 +27,49 @@ cost line shares one consistent hardware baseline.
 
 ## GPU Migration Action Items
 
-Agreed August 21, 2026, sequenced as separate small changes (each gets its
-own diff and test before moving to the next, per the Researcher Learning
-Requirement in `CLAUDE.md`). These are a prerequisite for item 5 ("run the
-real Optuna sweeps") in "Next Recommended Step" below -- no point running
-real sweeps until training actually uses the GPU.
+Agreed and fully completed August 21, 2026, sequenced as separate small
+changes (each got its own diff and test), per the Researcher Learning
+Requirement in `CLAUDE.md`.
 
 1. Add a `device` parameter to `train_forward`/`train_inverse` in
-   `pinn_shared.py`. Defaults to auto-detect (GPU if available, else CPU);
-   explicit `device="cpu"` reserved for the control-timing run. Moves the
-   model, sampled points, and (for inverse) `alpha`/observations onto the
-   resolved device. -- DONE AND VERIFIED (August 21, 2026). The initial
-   commit only updated the inside of these two functions; two call sites
-   still assumed CPU tensors and would have crashed on this GPU machine:
-   `cn_nls_baseline` called `.numpy()` directly on `x_obs`/`t_obs`/`u_obs`
-   (now GPU tensors when returned from `train_inverse`), and three cells in
-   `heat_pinn_tuned.ipynb` called a GPU-resident model on the CPU-resident
-   shared test grid. Both fixed: `cn_nls_baseline` now uses
-   `.cpu().numpy()`, and the three notebook cells move the test grid to
-   *that specific model's* actual device (via
-   `next(model.parameters()).device`, not a blanket notebook-level
-   variable) and bring the prediction back with `.cpu()` right after --
-   this specifically preserves the explicit `device="cpu"` control-timing
-   path above, which a hardcoded notebook-level device variable would have
-   broken. Verified via standalone scratch scripts covering the default-GPU
-   path, the explicit-CPU path, and `cn_nls_baseline` against GPU-resident
-   observations.
-2. Remove the per-iteration `.item()` GPU sync in both training loops.
-   Append `total_loss.detach()` during the loop instead of calling `.item()`
-   every step; convert to floats once at the end via
-   `torch.stack(...).cpu().tolist()`. The periodic print and Optuna-pruning
-   `.item()` calls (every 200 iters) stay as-is. -- DONE AND VERIFIED
-   (August 21, 2026). One subtlety found during implementation:
-   `train_inverse`'s `alpha` is a single `nn.Parameter` the optimizer
-   mutates in place every step, so `alpha.detach()` alone would make every
-   stored history entry alias the same storage and collapse the whole
-   alpha-convergence history to one repeated final value; fixed with
-   `alpha.detach().clone()` instead. The loss tensors are fresh objects
-   each iteration (not mutated in place), so plain `.detach()` is correct
-   for those. Verified via a scratch script confirming `history_alpha`
-   contains genuine per-iteration variation (319/320 unique values across
-   320 iterations) rather than a collapsed repeated value.
-3. Set `torch.backends.cudnn.deterministic = True` inside `set_seed()` so
-   reproducible-seed runs stay reproducible on GPU (CUDA's algorithm
-   auto-selection can otherwise vary run to run). -- INVESTIGATED AND
-   DROPPED (August 21, 2026), not implemented. `pinn_architecture` uses
-   only `nn.Linear` layers (no convolutions), so `cudnn.deterministic`
-   governs conv algorithm selection this network never uses. Rather than
-   implement the originally-planned fix (or the stronger
-   `torch.use_deterministic_algorithms(True)` + `CUBLAS_WORKSPACE_CONFIG`
-   alternative) on schedule regardless, tested empirically first: trained
-   the same config with the same seed twice on this GPU and compared
-   results directly. Outcome was bit-for-bit identical -- same `rel_l2` to
-   the last digit, identical full loss history, identical model
-   predictions via `torch.equal()` on a fixed grid. No evidence of GPU
-   nondeterminism to fix for this architecture, so no code change was
-   made; forcing `use_deterministic_algorithms(True)` would add real risk
-   (can error on ops without a deterministic implementation, can slow
-   training) for no measured benefit. This finding is specific to this
-   machine's hardware/driver/PyTorch build (RTX 5070 Ti, driver 591.86,
-   `torch==2.11.0+cu128`) -- re-verify with the same bit-for-bit
-   double-run check if training ever moves to different hardware, rather
-   than assuming determinism still holds.
-4. Generate `requirements.txt` via `pip freeze` from `.venv`. Not a code
-   change; pairs with the hardware-disclosure paragraph above. -- DONE
-   (August 21, 2026), committed separately. Note for later, when
-   `README.md` gets fleshed out: `torch==2.11.0+cu128` is not on plain
-   PyPI -- installing this file elsewhere needs PyTorch's CUDA index URL
-   passed explicitly, or `pip install -r requirements.txt` will fail to
-   find that exact wheel.
+   `pinn_shared.py`, defaulting to auto-detect (GPU if available, else CPU),
+   with explicit `device="cpu"` reserved for a future control-timing run.
+   DONE. The initial commit only updated the inside of these two functions;
+   two call sites still assumed CPU tensors and would have crashed on this
+   GPU machine -- `cn_nls_baseline`'s bare `.numpy()` calls on
+   `x_obs`/`t_obs`/`u_obs` (now GPU tensors when returned from
+   `train_inverse`), and three `heat_pinn_tuned.ipynb` cells calling a
+   GPU-resident model on the CPU-resident shared test grid. Fixed: `cn_nls_baseline`
+   now uses `.cpu().numpy()`; the three notebook cells move the test grid to
+   *that specific model's* actual device (`next(model.parameters()).device`,
+   not a blanket notebook-level variable, since that would break the planned
+   `device="cpu"` control-timing path) and bring predictions back with
+   `.cpu()` right after.
+2. Remove the per-iteration `.item()` GPU sync in both training loops. DONE.
+   Losses are now appended as detached GPU tensors during the loop and
+   converted to floats once in bulk after training via
+   `torch.stack(...).cpu().tolist()`. One subtlety: `train_inverse`'s
+   `alpha` is a single `nn.Parameter` the optimizer mutates in place, so
+   plain `.detach()` would make every stored history entry alias the same
+   storage and collapse the whole alpha-convergence history to one repeated
+   value -- fixed with `alpha.detach().clone()`. Verified via a scratch
+   script confirming genuine per-iteration variation (319/320 unique values
+   across 320 iterations).
+3. Set `torch.backends.cudnn.deterministic = True` for GPU reproducibility.
+   INVESTIGATED AND DROPPED, not implemented. `pinn_architecture` uses only
+   `nn.Linear` (no convolutions), so this setting governs an op class the
+   network never uses. Tested empirically instead: trained the same config/seed
+   twice on this GPU and compared directly -- bit-for-bit identical `rel_l2`,
+   loss history, and predictions (`torch.equal()`). No evidence of
+   nondeterminism to fix, so no code change was made. Finding is specific to
+   this machine's hardware/driver/PyTorch build (RTX 5070 Ti, driver 591.86,
+   `torch==2.11.0+cu128`) -- re-verify with the same bit-for-bit double-run
+   check if training ever moves to different hardware.
+4. Generate `requirements.txt` via `pip freeze`. DONE, regenerated a second
+   time after installing `scikit-learn` (found missing via a notebook dry
+   run -- see "Completed Cleanup Work (August 21, 2026)" below). Note for
+   `README.md`: `torch==2.11.0+cu128` is not on plain PyPI -- installing
+   this file elsewhere needs PyTorch's CUDA index URL passed explicitly.
 
 ## Current Project State
 
@@ -109,6 +83,7 @@ The repository currently contains:
 - `heat_pinn_tuned.ipynb`
 - `James_Desjarlais_PINN_Final.pdf`
 - `README.md`
+- `requirements.txt`
 - `.gitignore`
 - `CLAUDE.md`
 - `PROJECT_STATUS.md`
@@ -122,9 +97,7 @@ The following generated Optuna files are available locally but ignored by Git:
 
 Methodological cleanup began July 20, 2026 (see "Completed Cleanup Work"
 below). All Optuna study files above still reflect the pre-cleanup
-methodology (leaky validation grid for forward HPO, non-reproducible
-per-trial observations for inverse HPO) until a fresh sweep is explicitly
-approved and run.
+methodology until a fresh real sweep is run.
 
 ## Research Structure
 
@@ -142,131 +115,33 @@ required to obtain that performance.
 
 ## Known Issues to Investigate
 
-These issues have been identified but not yet corrected:
+These issues have been identified but not yet corrected -- investigation
+targets, not permission to change everything at once:
 
-- Observation generation, collocation sampling, and model initialization use
-  shared global random-number state. Observation generation specifically was
-  fixed July 20, 2026 (see "Completed Cleanup Work"); collocation sampling and
-  model init still share global RNG state, which is normal/acceptable
-  training-procedure stochasticity rather than a fairness bug, per July 20
-  discussion.
-- RESOLVED August 21, 2026: the inverse PINN diffusivity used to not be
-  constrained to remain positive. Revisited the July 20, 2026 rejection of
-  `log(alpha)` reparameterization after discussing the concrete trade-off
-  (it changes alpha's optimization geometry -- a fixed `adam_lr` produces
-  a step in alpha-space that scales with alpha's current magnitude, rather
-  than the previous fixed absolute step size -- but does not invalidate
-  any existing committed results, since inverse has not had a completed
-  real sweep yet); decided the guarantee (alpha can no longer go negative
-  or hit zero under any value the optimizer takes) was worth that
-  trade-off, in preference to the other options considered (a soft
-  penalty term, which needs a new hyperparameter and only discourages
-  rather than guarantees; a hard clamp, which is non-differentiable and
-  can hide how far an optimizer actually wanted to diverge; detect-and-
-  flag only, which does not prevent wasted compute on a doomed run).
-  `train_inverse` in `pinn_shared.py` now optimizes `log_alpha` (a new
-  `nn.Parameter`, initialized from `torch.log(inverse_config["alpha_init"])`)
-  instead of `alpha` directly; the physical diffusivity is recomputed as
-  `torch.exp(log_alpha)` wherever needed. A real subtlety surfaced during
-  implementation: the L-BFGS closure computes its own local `alpha =
-  torch.exp(log_alpha)`, which is scoped to the closure and does NOT
-  update the outer-scope `alpha` used after `optimizer_lbfgs.step(closure)`
-  returns (a plain `=` inside a nested function creates its own local
-  binding rather than reaching back into the enclosing scope) -- without
-  an explicit `alpha = torch.exp(log_alpha)` recomputed in the outer scope
-  immediately after L-BFGS finishes, every L-BFGS update to alpha would
-  have been silently discarded, with the returned "alpha" permanently
-  stuck at whatever it was at the end of the Adam phase. Fixed by adding
-  that recompute, and by switching the post-L-BFGS diagnostic's gradient
-  check from `alpha.grad` to `log_alpha.grad` (the freshly-recomputed
-  `alpha` never itself participates in a `backward()` call, so it has no
-  `.grad` populated -- `log_alpha` is the actual leaf Parameter that
-  accumulates gradients). No API/return-shape changes: `train_inverse`
-  still returns `"alpha"` as a plain float and `"history_alpha"` as a list
-  of floats representing the physical (not log-space) value, so no
-  notebook call sites needed to change.
-  Verified via three scratch-script checks: (1) under a deliberately
-  aggressive learning rate designed to destabilize a raw-alpha
-  parameterization, alpha stayed strictly positive across all 300+
-  recorded values even as it was driven down to ~0.004 -- confirming the
-  positivity guarantee holds even in an adversarial case; (2) an isolated,
-  well-conditioned synthetic probe (a trivial closure + a single L-BFGS
-  step) confirmed the outer-scope recompute genuinely picks up the
-  closure's optimizer update (0.1 -> 0.138), independent of whether real
-  training happens to produce a large enough gradient to see the effect
-  at limited float precision; (3) a normal-scale run recovered
-  alpha=0.377 against true_alpha=0.4, confirming ordinary convergence
-  behavior is unaffected.
-- RESOLVED August 21, 2026 (see "Next Recommended Step" item 2 above for the
-  full reasoning): Optuna pruning used to compare weighted training loss
-  even though the loss weights vary between trials. Forward now prunes on
-  a windowed-average unweighted residual; inverse now prunes on a
-  windowed-average alpha error.
+- Collocation sampling and model initialization use shared global
+  random-number state. This is normal/acceptable training-procedure
+  stochasticity rather than a fairness bug (July 20, 2026 discussion;
+  observation generation itself was already fixed the same day).
 - `N_bc` represents points per boundary, so the actual total is twice the
-  configuration value.
-- `heat_pinn_basic.ipynb` does not currently run cleanly from top to bottom and
-  duplicates (with some divergence) logic that now lives in `pinn_shared.py`.
-  Updated July 22, 2026: `baseline_inverse_config` is now filled in with the
-  real original `heat_pinn_basic.ipynb` inverse hyperparameters (no longer
-  `None` placeholders), and both the forward and inverse sections of
-  `heat_pinn_tuned.ipynb` now run their baseline configs through the shared
-  training functions. What's left before `heat_pinn_basic.ipynb` can actually
-  be removed: nothing has been *run* yet this session beyond tiny-config
-  smoke tests -- a real top-to-bottom notebook run (or at least the baseline
-  cells) is needed to confirm both baseline numbers look sane before treating
-  `heat_pinn_basic.ipynb` as safely retirable.
-- Found July 22, 2026 during a full read-through of the reorganized
-  notebook: the inverse Optuna sweep's trial-selection objective and the
-  final retrain loop's reported "tuned inverse PINN" accuracy both used the
-  identical, single fixed noisy observation draw. Fixed July 26, 2026 (see
-  "Completed Cleanup Work") by splitting the inverse pipeline into a search
-  stage (unchanged, one fixed dataset), a confirmation round (picks the
-  winning config on fresh datasets the search stage never saw), and a final
-  evaluation (retrains only the frozen winner on datasets untouched by
-  either earlier stage, and this is what gets reported and compared against
-  CN-NLS) -- so no single dataset both selects a winner and reports its
-  accuracy.
-- RESOLVED August 21, 2026 (see "Next Recommended Step" item 3 above):
-  baseline PINN field-evaluation time used to never be measured for the
-  forward problem. Now timed per seed and reported as mean ± std, both in
-  the baseline section's printout and in the final comparison table.
-- New July 22, 2026, RESOLVED August 21, 2026: the forward and inverse
-  Optuna search spaces used to differ in undocumented ways (inverse
-  hardcoded `activation="sin"` and `N_f=10000`, and searched `N_bc`/`N_ic`
-  over double forward's range). Decided and implemented -- see "Next
-  Recommended Step" item 1 above for the full reasoning per dimension.
-  `activation`/`N_f`/`hidden_size`/`N_bc`/`N_ic` now match forward's search
-  space exactly; whether inverse specifically benefits from denser BC/IC
-  coverage is deferred to a dedicated follow-up ablation rather than left
-  as an unexamined asymmetry in the main comparison.
-- RESOLVED August 21, 2026 (see "Next Recommended Step" item 3 above): the
-  forward problem's true diffusivity (0.4) used to be a bare, repeated
-  literal with no single source of truth across `pinn_shared.py`'s
-  `train_forward`, the notebook's grid cell, and the FD-vs-PINN comparison
-  cell. `train_forward` now reads `forward_config["true_alpha"]`, and all
-  three call sites reference `forward_config["true_alpha"]`/
-  `FORWARD_FIXED_CONFIG["true_alpha"]` instead of a bare `0.4`.
-- Minor, low-priority cosmetic-only inconsistencies noticed July 22, 2026
-  (not correctness issues): `FORWARD_FIXED_CONFIG["lambda_pde"]` is an int
-  (`1`) while `INVERSE_FIXED_CONFIG["lambda_pde"]` is a float (`1.0`),
-  functionally identical; forward's mean+/-std reporting variables use a
-  `pinn_` naming prefix while inverse's use `tuned_inverse_` for the
-  analogous quantity; a comment in `heat_pinn_tuned.ipynb`'s representative-
-  run plotting cell references an "avoid two copies" dedup rationale that
-  is now slightly stale phrasing since the grid is built once from the start
-  rather than deduplicated after the fact.
-- No `requirements.txt`/environment file, and `README.md` is a single
-  placeholder sentence -- a fresh clone currently has no setup instructions or
-  dependency list. Now trivial to generate via `pip freeze` from the new
-  `.venv`.
-- New August 21, 2026: Crank-Nicolson is CPU-bound (no GPU benefit at this
-  problem size) while PINN training/tuning now runs on GPU. This asymmetry is
-  acceptable if disclosed (see `CLAUDE.md`'s Experimental Integrity section,
-  updated the same day), but whether to also add a same-hardware CPU-only
-  PINN timing as a secondary control line is still an open researcher
-  decision, not yet made.
-
-These are investigation targets, not permission to change everything at once.
+  configuration value -- a naming-clarity issue, not a correctness bug.
+- `heat_pinn_basic.ipynb` duplicates logic that now lives in `pinn_shared.py`
+  and should eventually be removed. Blocked on the real Optuna sweep
+  actually running and its baseline/tuned numbers looking sane -- not yet
+  done, since no real sweep has been run this session.
+- Minor, low-priority cosmetic-only inconsistencies (not correctness
+  issues): `FORWARD_FIXED_CONFIG["lambda_pde"]` is an int (`1`) while
+  `INVERSE_FIXED_CONFIG["lambda_pde"]` is a float (`1.0`), functionally
+  identical; forward's mean+/-std reporting variables use a `pinn_` naming
+  prefix while inverse's use `tuned_inverse_` for the analogous quantity;
+  one stale comment in the representative-run plotting cell references an
+  "avoid two copies" rationale that no longer quite applies.
+- `README.md` is still a single placeholder sentence -- a fresh clone has
+  no setup instructions. `requirements.txt` now exists (see GPU Migration
+  item 4 above), including the CUDA-index-URL caveat that should be copied
+  into the README when it's written.
+- Whether to add a same-hardware CPU-only PINN timing as a secondary
+  control line (alongside CN's already-disclosed CPU-only cost) is still an
+  open researcher decision, not yet made either way.
 
 ## Completed Setup Work
 
@@ -277,6 +152,144 @@ These are investigation targets, not permission to change everything at once.
 - Added the current source files and notebooks.
 - Added persistent Claude project instructions.
 - Added this session-handoff file.
+
+## Completed Cleanup Work (August 21, 2026)
+
+The largest single session so far -- migrating to new hardware, then working
+through the full priority-ordered methodology backlog. All changes are in
+`pinn_shared.py` and `heat_pinn_tuned.ipynb` unless noted.
+
+- Migrated development to a new Windows PC (Ryzen 9950X, RTX 5070 Ti). Set
+  up `.venv`, verified CUDA-enabled torch, installed Git for Windows
+  (previously only GitHub Desktop's bundled, non-PATH git existed) and
+  `scikit-learn` (found missing via a notebook dry run, needed by
+  `optuna.visualization.plot_param_importances()`). `requirements.txt`
+  generated and later regenerated to include `scikit-learn`.
+- Completed the full GPU migration -- see "GPU Migration Action Items"
+  above for the four-item detail (device param + device-mismatch fixes,
+  `.item()`-sync removal, the `cudnn.deterministic` investigation-and-drop,
+  `requirements.txt`).
+- Aligned inverse's Optuna search space with forward's exactly
+  (`activation`, `N_f`, `hidden_size`, `N_bc`/`N_ic` all matched) after
+  finding no physics justification for the prior narrower space -- it was
+  sized for MacBook CPU time, not a deliberate scientific choice, and
+  forward's own completed sweep already showed `tanh` beating `sin`, which
+  undercut the assumption inverse's fixed `sin` was built on. Whether
+  inverse specifically benefits from denser BC/IC coverage (the one
+  dimension with a real candidate physics justification) is deferred to a
+  future ablation rather than kept as an unexamined asymmetry.
+- Bumped `n_trials` 100 -> 300 for both problems, grounded in a real timing
+  benchmark on this GPU (~10-20s per full-sized forward trial, ~13-20s
+  inverse) showing 300 trials lands around 1.5-2 hours combined with
+  pruning -- versus roughly 6 hours total for 100 trials on the old
+  MacBook's CPU. Pruning parameters (`n_startup_trials`, `n_warmup_steps`)
+  left unchanged, since they answer questions about training dynamics that
+  don't change with total trial count.
+- Fixed Optuna pruning to compare trials fairly. Previously compared raw
+  weighted `total_loss` across trials, but the loss weights are themselves
+  searched per-trial over a huge log-uniform range, so magnitudes weren't
+  comparable for reasons unrelated to fit quality. Forward now prunes on a
+  200-iteration windowed average of the *unweighted* physics/boundary/
+  initial residual (sufficient since forward has no unknown parameter to
+  identify). Inverse prunes on a windowed average of `alpha_error` instead
+  -- the unweighted residual alone can't distinguish a correctly-identified
+  alpha from a self-consistent but wrong one, since only `data_loss`
+  actually disambiguates alpha and would be diluted in an unweighted sum.
+  `alpha_error` is the same quantity `objective_inverse`'s final selection
+  already uses, evaluated progressively rather than only at the end --
+  confirmed this doesn't introduce a new ground-truth-dependence channel,
+  since pruning only affects which trials get cut short, not which config
+  wins. Windowing (not instantaneous per-checkpoint values) applied to both,
+  since alpha doesn't move monotonically during training. Verified via a
+  scratch Optuna study forcing some trials to be clearly worse: pruning
+  triggered for both problems (6/10 forward, 4/10 inverse), all reported
+  values finite and declining as expected.
+- Consolidated forward's hardcoded `true_alpha=0.4` literal into
+  `forward_config`/`FORWARD_FIXED_CONFIG` (matching how inverse's
+  `INVERSE_OBS_CONFIG`/`INVERSE_FIXED_CONFIG` already do), and `train_forward`
+  now reads `forward_config["true_alpha"]` instead of a hardcoded local
+  `alpha = 0.4`. Added baseline PINN field-evaluation timing for forward
+  (measured per seed, previously un-timed and printed `N/A`). Verified a
+  model trained with `true_alpha=0.7` genuinely tracks the 0.7 exact
+  solution (not 0.4), and that omitting `true_alpha` now raises `KeyError`.
+- Reparameterized inverse's `alpha` as `log_alpha` (`alpha = exp(log_alpha)`
+  computed fresh wherever needed) so the recovered diffusivity can never go
+  negative or hit zero -- revisited the July 20, 2026 rejection of this
+  approach after discussing the concrete trade-off (changes alpha's
+  optimization geometry; a fixed `adam_lr` now produces a step in
+  alpha-space scaling with alpha's current magnitude) versus the
+  alternatives (soft penalty: needs a new hyperparameter, only discourages
+  rather than guarantees; hard clamp: non-differentiable, can hide how far
+  an optimizer wanted to diverge; detect-and-flag only: doesn't prevent
+  wasted compute). A real bug surfaced during implementation: the L-BFGS
+  closure computes its own local `alpha = torch.exp(log_alpha)`, which is
+  scoped to the closure and does not update the outer-scope `alpha` used
+  after `optimizer_lbfgs.step(closure)` returns -- every L-BFGS update
+  would have been silently discarded without an explicit recompute added in
+  the outer scope immediately after L-BFGS finishes. Fixed, plus switched
+  the post-L-BFGS diagnostic's gradient check from `alpha.grad` to
+  `log_alpha.grad` (the recomputed `alpha` never itself participates in a
+  `backward()` call). No API changes -- `train_inverse` still returns
+  `"alpha"` as a plain float. Verified via three checks: alpha stayed
+  strictly positive under a deliberately destabilizing learning rate even
+  as it was driven to ~0.004; an isolated synthetic probe confirmed the
+  outer-scope recompute genuinely picks up the closure's update; a
+  normal-scale run recovered `alpha=0.377` against `true_alpha=0.4`.
+- Added five sensitivity analyses to `heat_pinn_tuned.ipynb`, all freezing
+  the already-tuned winning config rather than re-running HPO per point
+  (testing robustness of the selected config, not repeating the expensive
+  search), and all reusing already-computed default-point results instead
+  of retraining duplicates of the identical experiment:
+  - Inverse noise sweep (cell `157f354e`): `noise_std` in
+    `[0.01, 0.05, 0.1, 0.2]` at fixed `N_obs=50`.
+  - Inverse observation-count sweep (cell `1b6c3646`): `N_obs` in
+    `[10, 25, 50, 100]` at fixed `noise_std=0.05`.
+  - Forward `true_alpha` sweep (cell `5f58a1ce`): `true_alpha` in
+    `[0.1, 0.4, 0.7, 1.0]` against FD (needs no retraining, `fd_solver`
+    takes `alpha` directly) -- forward previously had zero sensitivity
+    analysis of its own.
+  - Inverse `true_alpha` sweep (cell `69c40d92`): same four values, with
+    `alpha_init` deliberately kept fixed at its already-tuned value rather
+    than scaling with the swept alpha, since a real deployment of this
+    tuned recipe would not know to adjust `alpha_init` either -- the
+    realistic generalization test, not an unfair handicap. All four values
+    stay within CN-NLS's fixed `[0.01, 1.0]` search range.
+  - Seed ranges kept disjoint across every stage and sweep: search=0,
+    confirmation=1-5, final-eval=6-10, noise sweep=11-15, N_obs sweep=16-20,
+    forward alpha sweep=20-24, inverse alpha sweep=21-25.
+  - Confirmed in passing: the "test top-3 candidates across 5 seeds, pick
+    winner by mean performance" method was already implemented for both
+    problems before this session's sweep work began -- kept at top-3
+    rather than bumped to top-5, per researcher choice.
+- Verified the complete notebook end-to-end three times via reduced-scale
+  `jupyter nbconvert --execute` dry runs (n_trials=3, cut iteration counts,
+  isolated scratch-only Optuna storage/pickle files that could never
+  collide with the real ones) as each round of cells was added. Final pass:
+  zero errors across the whole notebook, both final comparison tables
+  printed completely, and FD/CN-NLS (unaffected by the dry run's PINN-side
+  iteration-count reduction) produced properly accurate results at every
+  check -- e.g. FD rel L2 error `3.3e-07`, CN-NLS recovering
+  `alpha=0.413` against `true_alpha=0.4`. The `scikit-learn` gap (see
+  above) was caught by the first of these dry runs; without it, the real
+  300-trial sweep would have crashed after the full search completed,
+  before any retrain/comparison cells ran.
+  - Tooling note for future sessions: the notebook has grown too large for
+    the Read tool to process in one call, which `NotebookEdit` requires.
+    The third dry run's scratch copy was prepared by directly rewriting
+    cell sources via a Python/json script instead, applied only to a
+    throwaway file outside the repo -- not a change to how the real
+    notebook gets edited, but a workaround worth remembering if more cells
+    get added later.
+- Confirmed the real notebook itself was never touched by any dry-run
+  reduction (all three dry runs only ever modified throwaway scratchpad
+  copies) -- `n_trials=300`, real iteration counts, and no `DRYRUN`
+  references anywhere, verified directly against the file before ending
+  the session.
+
+Testing throughout was standalone scratch scripts (not part of the repo)
+for `pinn_shared.py`-level changes, plus three full-notebook
+`jupyter nbconvert --execute` dry runs at reduced scale for notebook-level
+integration, as described above. No real Optuna sweep has been run yet.
 
 ## Completed Cleanup Work (July 20, 2026)
 
@@ -390,12 +403,6 @@ full manual trace confirming every cell's variable references are satisfied
 by something above it in the new order. No real Optuna sweep or full
 notebook execution was run.
 
-A follow-up review pass (see the "Known Issues to Investigate" entries
-above) found several methodology questions and one hardcoded-value
-redundancy that predate this session's reordering but were surfaced by it;
-none have been fixed yet (the observation-reuse item was fixed July 26,
-2026 -- see below).
-
 ## Completed Cleanup Work (July 26, 2026)
 
 All changes are in `heat_pinn_tuned.ipynb`; `pinn_shared.py` was not touched
@@ -415,9 +422,8 @@ this session.
   instead of a single-run number.
 - Added `INVERSE_OBS_CONFIG` (`N_obs`/`noise_std`/`true_alpha`) as a single
   source of truth for observation generation across all three stages,
-  ahead of planned follow-up sensitivity sweeps (varying noise level at
-  fixed observation count, and varying observation count at fixed noise
-  level, for both the tuned PINN and CN-NLS).
+  ahead of planned follow-up sensitivity sweeps (built out August 21, 2026
+  -- see above).
 - Removed a dead `alpha = 0.4` variable in the forward retrain-loop cell,
   left over from before the July 21 grid-deduplication fix; confirmed via
   grep it was never read anywhere else.
@@ -438,235 +444,37 @@ notebook execution was run.
 
 ## Current Uncommitted Changes
 
-None pending code changes -- all GPU-migration, search-space, pruning,
-timing/consolidation, and alpha-positivity fixes are committed (8 commits
-ahead of `origin/methodology-cleanup` as of this write-up, not yet
-pushed). `requirements.txt` was regenerated a second time today after
-installing `scikit-learn` (see item 7 below) and is part of this same
-uncommitted batch alongside this `PROJECT_STATUS.md` update.
+None. Working tree clean; this `PROJECT_STATUS.md` consolidation is the
+only pending change, about to be committed. `methodology-cleanup` is ahead
+of `origin/methodology-cleanup` by a small number of commits from today's
+session, not yet pushed (push via GitHub Desktop when ready).
 
 ## Next Recommended Step
 
-All four GPU migration items are resolved (see "GPU Migration Action Items"
-above): items 1, 2, and 4 done and verified; item 3 investigated and
-deliberately dropped (empirically confirmed unnecessary for this
-architecture/hardware, not implemented).
+The notebook is fully built, methodology-decided, and integration-tested --
+nothing else needs to happen before running the real sweep.
 
-Pick up the next item on the priority-ordered backlog (ordered
-biggest-impact first, per researcher preference):
-
-1. Forward/inverse Optuna search-space asymmetry -- DECIDED AND IMPLEMENTED
-   (August 21, 2026). Discussed each dimension on its merits rather than
-   picking a default: `activation` and `N_f` asymmetries had no physics
-   justification found (the original narrower inverse space was sized for
-   MacBook CPU training time, not a deliberate scientific choice, and
-   forward's own HPO run already undercuts the "sin is the right basis so
-   fix it" assumption inverse was built on); `N_bc`/`N_ic` being double
-   forward's range was the one dimension with a real candidate
-   justification (denser boundary/IC coverage could aid alpha
-   identifiability given only sparse noisy data), but that's a hypothesis,
-   not a tested finding, so it wasn't kept as an unexamined asymmetry in
-   the main comparison. `heat_pinn_tuned.ipynb` cell `d9980ad6` now has
-   `activation` (`["tanh","sin"]`), `N_f` (`[5000,10000,20000]`),
-   `hidden_size` (`[16,32,64,128]`), and `N_bc`/`N_ic` (`[100,200,400]`)
-   all matching forward's search space exactly. Verified via a scratch
-   Optuna study (tiny iteration counts) confirming both activations, all
-   three `N_f` values, and the new `N_bc` range actually get sampled, and
-   that the specific corner case that never existed in the old space
-   (`hidden_size=16`, `activation="tanh"`, `N_f=5000`, `N_bc=100`) runs
-   cleanly through `train_inverse`. Whether inverse specifically benefits
-   from denser BC/IC coverage is deferred to a dedicated follow-up
-   ablation, not resolved here. Still pending, as separate approval-gated
-   steps: deciding `n_trials` for a fresh sweep (now that each trial is far
-   cheaper on GPU, likely more than the current 100) and actually running
-   it -- widening the search space here was free (no compute), running a
-   real sweep is not.
-2. Optuna pruning signal -- DECIDED AND IMPLEMENTED (August 21, 2026).
-   Original problem: pruning compared weighted `total_loss` across trials,
-   but `lambda_bc`/`lambda_ic`/(`lambda_data` for inverse) are themselves
-   searched per-trial over a huge log-uniform range (0.001-1000), so
-   raw weighted-loss magnitudes are not comparable between trials for
-   reasons having nothing to do with fit quality.
-   - Forward now reports the UNWEIGHTED physics/boundary/initial residual
-     (`pde_loss + bc_loss + ic_loss`), averaged over the preceding 200
-     iterations rather than a single instantaneous reading. Sufficient for
-     forward because there is no unknown parameter to identify -- a low
-     residual and a correct solution are the same thing.
-   - Inverse deliberately does NOT use the same unweighted-sum approach,
-     despite the appeal of symmetry: the PDE residual alone cannot
-     distinguish a correctly-identified alpha from a self-consistent but
-     wrong one (a flexible enough network can satisfy the PDE for the
-     wrong alpha too), and `data_loss` -- the one term that actually
-     disambiguates alpha -- would just be one of several equally-weighted
-     terms in an unweighted sum, with no guarantee it carries enough
-     influence to matter. Inverse instead reports `alpha_error`
-     (`abs(alpha - true_alpha)`), windowed the same way -- the same
-     quantity `objective_inverse` already uses to pick the winning trial,
-     evaluated progressively instead of only at the end.
-   - Considered and explicitly rejected using `alpha_error` purely because
-     it uses `true_alpha`, which a real deployment would not have: this
-     does not compound that concern, since pruning only decides which
-     trials get cut short to save compute -- it does not determine which
-     config wins (the final objective already uses `alpha_error`
-     regardless of what pruning does), so pruning on the same signal
-     doesn't add a new channel for ground truth to influence the result,
-     it just reaches the same eventual answer faster. Whether the
-     top-level inverse objective itself should move to a ground-truth-free
-     criterion (e.g., held-out noisy-data fit) instead of `alpha_error` is
-     a separate, bigger methodology question, logged but not decided here.
-   - Windowing (200-iteration rolling average, not the instantaneous value
-     at each checkpoint) applied to both, so a trial only gets flagged as
-     bad if persistently worse across the whole window, not because it was
-     caught at one noisy/non-monotonic instant -- alpha in particular does
-     not move monotonically during training (confirmed in an earlier
-     scratch test). Windowing reuses the per-iteration GPU tensors already
-     being accumulated in `history_*` (from the `.item()`-removal fix
-     above), so it adds no extra CPU<->GPU syncs beyond the existing one
-     per 200-iteration checkpoint.
-   - Verified via a scratch Optuna study (10 trials each, deliberately wide
-     learning-rate range to force some trials to be clearly worse):
-     pruning actually triggers for both problems (6/10 forward trials
-     pruned, 4/10 inverse trials pruned), all reported intermediate values
-     are finite, and completed trials' windowed values decline over
-     training as expected.
-3. Baseline PINN field-evaluation timing + true-diffusivity consolidation --
-   DONE AND VERIFIED (August 21, 2026). `train_forward` now reads
-   `forward_config["true_alpha"]` instead of a hardcoded `alpha = 0.4`
-   (matching how `train_inverse` already requires `inverse_config["true_alpha"]`);
-   `forward_config` and `FORWARD_FIXED_CONFIG` in `heat_pinn_tuned.ipynb`
-   both carry `"true_alpha": 0.4` (mirroring how `INVERSE_OBS_CONFIG` and
-   `INVERSE_FIXED_CONFIG` both already carry inverse's), and the two
-   remaining bare `0.4` literals (the held-out test grid's exact solution,
-   the FD-vs-PINN comparison's exact solution) now read from
-   `forward_config["true_alpha"]` instead. Baseline's field-evaluation
-   time is now measured per seed (previously un-timed, printing `N/A` in
-   the final table) and reported as its own mean ± std cost line, both in
-   the baseline section's own printout and as a new row in the final
-   Baseline/Tuned/FD comparison table. Verified via a scratch script:
-   confirmed a model trained with `true_alpha=0.7` actually tracks the
-   alpha=0.7 exact solution (not 0.4) at a held-out point, and confirmed
-   omitting `true_alpha` from a config now raises `KeyError` instead of
-   silently keeping the old hardcoded value.
-4. Sensitivity sweeps -- DONE AND VERIFIED (August 21, 2026). Added ahead
-   of the real sweep, not after, since both sweeps need `winning_inverse_config`
-   (the frozen config the confirmation round selects) as input and so can
-   only run after the main inverse search anyway -- bundling them into the
-   same session avoids a second GPU commitment later just to reload the
-   winning config. Two new cells appended after `9098ed9d` in
-   `heat_pinn_tuned.ipynb`:
-   - Noise sweep (cell `157f354e`): `noise_std` in `[0.01, 0.05, 0.1, 0.2]`
-     at fixed `N_obs=50`.
-   - N_obs sweep (cell `1b6c3646`): `N_obs` in `[10, 25, 50, 100]` at fixed
-     `noise_std=0.05`.
-   - Both freeze `winning_inverse_config` rather than re-tuning per point
-     (testing robustness of the already-selected config to noise/N_obs,
-     not re-running the expensive HPO search 4 more times each), run 5
-     seeds per point with both tuned PINN and CN-NLS, and reuse the
-     already-computed final-evaluation/CN-NLS results for each sweep's
-     default point (`noise_std=0.05`/`N_obs=50`) instead of retraining a
-     duplicate of the identical experiment. Seed ranges kept disjoint from
-     every other stage and from each other: search=0, confirmation=1-5,
-     final-eval=6-10, noise sweep=11-15, N_obs sweep=16-20.
-   - Verified via a second reduced-scale notebook dry run (same
-     methodology as item 7 below): both sweeps executed with zero errors,
-     the default-point reuse logic triggered exactly once per sweep as
-     intended, and CN-NLS's accuracy (unaffected by the dry run's
-     iteration-count reduction, since it doesn't depend on gradient-based
-     training) showed the expected physical trends -- alpha error rising
-     with noise (`0.003 -> 0.041 -> 0.080` as `noise_std` went
-     `0.01 -> 0.1 -> 0.2`) and falling with more observations
-     (`0.036 -> 0.010 -> 0.008` as `N_obs` went `10 -> 25 -> 100`),
-     confirming the sweep mechanics are wired correctly.
-   - Extended with a third and fourth sweep (August 21, 2026): `true_alpha`
-     sensitivity for BOTH forward and inverse, using the identical value
-     set `[0.1, 0.4, 0.7, 1.0]` in each so the two problems' results are
-     directly comparable. Forward's own robustness had zero sensitivity
-     analysis before this -- the added value is testing whether "is
-     PINN-tuning worth it" holds generally, or is an artifact of the one
-     `true_alpha=0.4` value everything else in the notebook reports.
-     - Forward sweep (cell `5f58a1ce`, inserted right after `e3e8d970`):
-       freezes the winning forward config (`top_configs[best_config_idx]`),
-       retrains 5 seeds per non-default alpha value, compares against FD
-       (which needs no retraining -- `fd_solver` takes `alpha` directly).
-       Seeds 20-24, chosen for readability only -- forward has no shared-
-       dataset leakage risk the way inverse does.
-     - Inverse sweep (cell `69c40d92`, appended last): freezes
-       `winning_inverse_config`, changing only `true_alpha` per point --
-       `alpha_init` deliberately stays fixed at its already-tuned value
-       (0.1) rather than scaling with the swept alpha, since a real
-       deployment of this tuned recipe on a genuinely different
-       diffusivity would not know to adjust `alpha_init` either; keeping
-       it fixed is the realistic generalization test, not an unfair
-       handicap. Sweep values must stay within CN-NLS's fixed `[0.01, 1.0]`
-       search range for CN-NLS to have any chance of finding them (all
-       four values do). Seeds 21-25.
-     - Both reuse the already-computed `true_alpha=0.4` results instead of
-       retraining a duplicate of the identical experiment, same pattern as
-       the noise/N_obs sweeps.
-     - Confirmed in passing while discussing this: the "test top
-       candidates across several seeds, pick winner by mean performance"
-       selection method the researcher asked about was already implemented
-       for both problems (`top_configs`/`top_inverse_configs` cells,
-       already top-3 x 5 seeds each) -- kept at top-3, not bumped to 5, per
-       researcher choice.
-     - Verified via a third reduced-scale dry run. Notable tooling wrinkle:
-       the notebook has grown too large for the Read tool to process in
-       one call (needed by `NotebookEdit`), so this dry run's scratch copy
-       was prepared by directly rewriting cell sources via a Python/json
-       script instead of `NotebookEdit`, bypassing that limit -- same
-       reduction edits as before, applied to a throwaway file outside the
-       repo, not a change to how the real notebook is edited. Zero errors
-       across the whole notebook. Forward: FD's error stayed tiny
-       regardless of alpha (`~1e-7` to `~1e-6`) as expected, confirming FD
-       needs no retraining to adapt to a new diffusivity. Inverse: with
-       `alpha_init` fixed and training deliberately starved for dry-run
-       speed, the recovered alpha barely moved off its `0.1` starting
-       point at each test value, producing `alpha_error ~= |0.1 -
-       true_alpha|` almost exactly (`~0.600` at `true_alpha=0.7`, `~0.900`
-       at `true_alpha=1.0`) -- exactly the expected behavior for a network
-       given no real chance to converge, confirming `true_alpha` is
-       correctly threaded through both `generate_noisy_data` and
-       `train_inverse`'s config while `alpha_init` correctly stays fixed
-       as designed.
-5. Once the above are settled: actually run the real Optuna sweeps and
-   retrain loops (a real, approval-gated training job) to get real baseline/
-   tuned numbers, confirm they look sane, and only then remove
-   `heat_pinn_basic.ipynb`.
-6. Smaller polish items: `N_bc` naming clarification, fleshing out
-   `README.md` (including the `torch==2.11.0+cu128` CUDA-index-URL note
-   above), the unused top-level `device` variable left over in
-   `heat_pinn_tuned.ipynb` cell `16dcba3f` now that model-evaluation code
-   reads each model's own device instead, and the minor cosmetic-only
-   naming/comment inconsistencies noted above.
-7. Pre-real-sweep notebook integration check -- DONE (August 21, 2026).
-   Everything above (items 1-4, plus the GPU-migration and alpha-positivity
-   fixes) had only ever been verified via standalone scratch scripts
-   calling `pinn_shared.py` functions directly -- `heat_pinn_tuned.ipynb`
-   itself had not actually been executed top to bottom even once this
-   session, so notebook-level integration bugs (stale cell references,
-   execution-order issues) could not have been caught by any of that
-   testing. Ran a reduced-scale dry run instead: a scratchpad copy of the
-   notebook with `n_trials=3` and drastically cut iteration counts, its own
-   distinctly-named Optuna storage/pickle files (so it could never collide
-   with or overwrite the real ones -- confirmed none existed yet anyway),
-   executed via `jupyter nbconvert --execute`. Found one real bug this way:
-   `scikit-learn` was missing from `.venv`, needed internally by
-   `optuna.visualization.plot_param_importances()` -- without this check,
-   the real 300-trial sweep would have crashed at that exact cell *after*
-   the full ~1.5-2 hour search completed, before any retrain/comparison
-   cells ever ran. Installed `scikit-learn` and re-ran; the full notebook
-   then executed with zero errors end to end (verified by scanning every
-   cell's outputs for error-type entries -- none found), both final
-   Baseline/Tuned/(FD or CN-NLS) comparison tables printed completely, and
-   the FD solver and CN-NLS (unaffected by the iteration-count reduction,
-   since neither depends on gradient-based training) produced properly
-   accurate results -- FD rel L2 error `3.3e-07`, CN-NLS recovered
-   `alpha=0.413` against `true_alpha=0.4` -- confirming those code paths
-   are solid independent of this session's PINN-side changes.
-   `requirements.txt` regenerated afterward to include `scikit-learn`.
-   Repeated a second time after adding the sensitivity-sweep cells (item 4
-   above), since those were new, never-executed code -- that pass also
-   completed with zero errors.
+1. Run the real Optuna sweeps (`n_trials=300` each) and full retrain/
+   sensitivity-sweep pipeline in `heat_pinn_tuned.ipynb` -- a real,
+   already-approved training job. Estimated roughly 1.5-2 hours combined
+   for the two main searches, plus more for the five sensitivity sweeps at
+   full config scale. Before leaving it running unattended: disable
+   Windows sleep (screen lock/display-off is fine, full system sleep is
+   not) and keep whatever's executing the notebook (VSCode / Jupyter Lab)
+   open. Note: the setup cells (`e8d3682d`/`e1637f69`) delete the Optuna
+   `.db` files at the start of each run, so an interrupted run restarts
+   from scratch rather than resuming if the notebook is simply re-run from
+   the top.
+2. Once real results exist: confirm baseline/tuned numbers look sane
+   (that's the actual gate, not a formality -- the dry runs verified
+   wiring, not full-scale behavior), then retire `heat_pinn_basic.ipynb`.
+3. Decide whether to add a same-hardware CPU-only PINN control-timing run
+   (`pinn_shared.py` already supports `device="cpu"` -- no new code needed
+   either way, just a decision).
+4. Smaller polish, whenever convenient: `N_bc` naming clarification,
+   fleshing out `README.md`, removing the now-dead `device` variable in
+   notebook cell `16dcba3f`, and the minor cosmetic-only inconsistencies
+   noted under "Known Issues to Investigate" above.
 
 ## Suggested First Message to Claude
 
