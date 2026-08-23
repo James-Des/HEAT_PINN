@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-August 21, 2026
+August 22, 2026
 
 ## Current Branch
 
@@ -125,9 +125,10 @@ targets, not permission to change everything at once:
 - `N_bc` represents points per boundary, so the actual total is twice the
   configuration value -- a naming-clarity issue, not a correctness bug.
 - `heat_pinn_basic.ipynb` duplicates logic that now lives in `pinn_shared.py`
-  and should eventually be removed. Blocked on the real Optuna sweep
-  actually running and its baseline/tuned numbers looking sane -- not yet
-  done, since no real sweep has been run this session.
+  and should eventually be removed. Its blocking condition (real Optuna
+  sweep run, baseline/tuned numbers confirmed sane) is now satisfied as of
+  August 22, 2026 -- see "Real Sweep Results" above. Ready to remove,
+  pending explicit approval.
 - Minor, low-priority cosmetic-only inconsistencies (not correctness
   issues): `FORWARD_FIXED_CONFIG["lambda_pde"]` is an int (`1`) while
   `INVERSE_FIXED_CONFIG["lambda_pde"]` is a float (`1.0`), functionally
@@ -152,6 +153,84 @@ targets, not permission to change everything at once:
 - Added the current source files and notebooks.
 - Added persistent Claude project instructions.
 - Added this session-handoff file.
+
+## Real Sweep Results (August 22, 2026) -- READ THIS FIRST NEXT SESSION
+
+The real run (`n_trials=300` each, full retrain + all five sensitivity
+sweeps) completed successfully overnight -- no errors anywhere in the
+notebook, confirmed by scanning every cell's outputs. Full numbers live in
+`heat_pinn_tuned.ipynb`'s own cell outputs (source of truth, not
+duplicated here in full); this section is the headline summary plus what
+still needs a decision.
+
+**Forward**: Optuna search 2874.68s (~48 min), 164 completed / 131 pruned
+/ 5 failed (`NaN`, not a bug -- see below). Baseline rel L2
+`3.83e-3 +/- 1.81e-3`, Tuned `2.72e-4 +/- 5.43e-5` (tuning ~14x better than
+baseline), FD `3.34e-7` (~800x more accurate than even the tuned PINN).
+Notably, PINN's own field-evaluation time (`0.0119s`) is faster than one
+full FD solve (`0.0211s`) -- FD wins decisively on accuracy, not on
+inference speed. `true_alpha` sweep (`0.1/0.4/0.7/1.0`) confirms this gap
+holds across the whole tested range, not just at 0.4.
+
+**Inverse**: Optuna search 3575.42s (~60 min), 195 completed / 94 pruned /
+11 failed. Baseline alpha error `5.33e-2 +/- 9.3e-4`, Tuned
+`2.35e-2 +/- 1.16e-2`, CN-NLS `1.87e-2 +/- 1.22e-2` at `0.36s` per run
+(~100x faster than the PINN's own 36.27s per run, before even counting the
+~60 minutes of Optuna search that produced it). **CN-NLS is at least as
+accurate as the tuned PINN and dramatically cheaper** -- this is a real,
+legitimate research finding, not a methodology gap: three sensitivity
+sweeps (noise, `N_obs`, `true_alpha`) confirm CN-NLS wins or ties across
+nearly every tested condition, and the PINN's disadvantage *widens* at
+higher diffusivity (`true_alpha=1.0`: PINN `8.4e-2` vs. CN-NLS `2.7e-2`).
+Not perfectly one-sided though -- PINN edged out CN-NLS at a couple of
+individual sweep points (e.g. `N_obs=25`), so the honest characterization
+is "competitive, CN-NLS usually at least as good," not a total PINN loss.
+
+**The leakage-prevention methodology (built July 26, 2026) caught a real
+problem live, exactly as designed**: the inverse Optuna search stage's
+best trial showed `alpha_error=1.23e-5` on its one fixed dataset -- the
+confirmation round (5 fresh datasets) came back at `2.12e-2`, nearly 3
+orders of magnitude worse, confirming that headline number was a lucky
+single-dataset draw, not real generalization. The reported final number
+(`2.35e-2`) is the honest one, from data never used for selection.
+
+**`NaN` trial failures** (5 forward, 11 inverse): Optuna correctly marks
+these `FAILED` (excluded from best-trial ranking, no code fix needed) --
+real hyperparameter combinations that diverged during training, mostly
+clustered around extreme `lambda_bc`/`lambda_ic` values or (for inverse)
+small `hidden_size` with aggressive `adam_lr`. Worth a mention in the
+paper's practical-complexity discussion: PINN training can diverge
+outright for unlucky hyperparameter draws; CN never does.
+
+**Validated an earlier decision**: all top-5 inverse trials independently
+chose `activation="tanh"`, confirming the August 21 decision to widen
+inverse's search space to include it (previously hardcoded to `"sin"`).
+
+### Things that need to be addressed next session
+
+1. **The executed notebook is not yet committed.** `heat_pinn_tuned.ipynb`
+   now has real output but sits as an uncommitted change -- commit it
+   (with the real results) before anything else next session, so this
+   data isn't sitting only in the working tree.
+2. **Decide the paper's framing for the inverse result.** CN-NLS matching
+   or beating the tuned PINN, ~100x cheaper, is a legitimate finding but
+   changes what the paper's conclusion should say for the inverse problem
+   specifically -- worth deciding how to present this (not something to
+   quietly smooth over) before writing the discussion/conclusion section.
+3. **Retire `heat_pinn_basic.ipynb`?** The blocking condition ("confirm
+   real baseline/tuned numbers look sane") is now satisfied -- numbers
+   above are sane, consistent with expectations, no NaNs in anything
+   actually reported. Ready to remove, pending explicit approval (a file
+   deletion, per `CLAUDE.md`).
+4. **CPU-control-timing run** -- still an open, undecided researcher
+   question (see "Known Issues to Investigate").
+5. **Smaller polish** -- `N_bc` naming, `README.md`, the dead `device`
+   variable in cell `16dcba3f`, minor cosmetic inconsistencies -- all
+   still untouched, still low-priority.
+6. Consider whether the `NaN`-failure hyperparameter patterns are worth a
+   deliberate closer look (which specific combinations diverge and why)
+   as a small piece of the practical-complexity write-up, or just a
+   passing mention -- not yet decided either way.
 
 ## Completed Cleanup Work (August 21, 2026)
 
@@ -444,37 +523,20 @@ notebook execution was run.
 
 ## Current Uncommitted Changes
 
-None. Working tree clean; this `PROJECT_STATUS.md` consolidation is the
-only pending change, about to be committed. `methodology-cleanup` is ahead
-of `origin/methodology-cleanup` by a small number of commits from today's
-session, not yet pushed (push via GitHub Desktop when ready).
+`heat_pinn_tuned.ipynb` -- now contains the real 300-trial run's full
+output (all cells executed, no errors, results summarized in "Real Sweep
+Results" above). Not yet committed; see that section's numbered list for
+what to do with it. `methodology-cleanup` is ahead of
+`origin/methodology-cleanup` by a few commits from August 21, not yet
+pushed (push via GitHub Desktop when ready).
 
 ## Next Recommended Step
 
-The notebook is fully built, methodology-decided, and integration-tested --
-nothing else needs to happen before running the real sweep.
-
-1. Run the real Optuna sweeps (`n_trials=300` each) and full retrain/
-   sensitivity-sweep pipeline in `heat_pinn_tuned.ipynb` -- a real,
-   already-approved training job. Estimated roughly 1.5-2 hours combined
-   for the two main searches, plus more for the five sensitivity sweeps at
-   full config scale. Before leaving it running unattended: disable
-   Windows sleep (screen lock/display-off is fine, full system sleep is
-   not) and keep whatever's executing the notebook (VSCode / Jupyter Lab)
-   open. Note: the setup cells (`e8d3682d`/`e1637f69`) delete the Optuna
-   `.db` files at the start of each run, so an interrupted run restarts
-   from scratch rather than resuming if the notebook is simply re-run from
-   the top.
-2. Once real results exist: confirm baseline/tuned numbers look sane
-   (that's the actual gate, not a formality -- the dry runs verified
-   wiring, not full-scale behavior), then retire `heat_pinn_basic.ipynb`.
-3. Decide whether to add a same-hardware CPU-only PINN control-timing run
-   (`pinn_shared.py` already supports `device="cpu"` -- no new code needed
-   either way, just a decision).
-4. Smaller polish, whenever convenient: `N_bc` naming clarification,
-   fleshing out `README.md`, removing the now-dead `device` variable in
-   notebook cell `16dcba3f`, and the minor cosmetic-only inconsistencies
-   noted under "Known Issues to Investigate" above.
+See "Real Sweep Results (August 22, 2026)" above for the full numbered
+list -- in short: commit the executed notebook first, then decide the
+inverse result's framing for the paper, then retire `heat_pinn_basic.ipynb`
+(its blocking condition is now satisfied), then the smaller open items
+(CPU-control-timing decision, polish list) whenever convenient.
 
 ## Suggested First Message to Claude
 
