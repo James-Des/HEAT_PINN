@@ -79,6 +79,8 @@ class pinn_architecture(nn.Module):
         return self.output_layer(out)
 
 def sample_points(N_f, N_bc, N_ic):
+    # N_bc is points PER boundary (x=0 and x=1 each get N_bc), so the
+    # actual total boundary-point count sampled below is 2 * N_bc.
     x_f = torch.rand(N_f ,1)
     t_f = torch.rand(N_f, 1)
     
