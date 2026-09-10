@@ -16,3 +16,8 @@ venv/
 # Optuna generated storage
 optuna_*.db
 *_hpo_study.pkl
+
+# Internal working notes -- intentionally kept off the public `main` branch.
+# Still tracked on `methodology-cleanup`; do not re-add here.
+CLAUDE.md
+PROJECT_STATUS.md

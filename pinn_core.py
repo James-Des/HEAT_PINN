@@ -1,11 +1,14 @@
 """
-pinn_shared.py
+pinn_core.py (renamed from pinn_shared.py on 2026-09-10)
 
-Shared logic for the heat-equation PINN vs. Crank-Nicolson study.
-Import this from both heat_pinn_basic.ipynb (untuned baselines) and
-heat_pinn_tuned.ipynb (HPO-tuned runs + CN-NLS baseline), so both
-notebooks run the literal same implementation, differing only in the
-config dict passed in.
+Core logic for the heat-equation PINN vs. Crank-Nicolson study. Originally
+shared between two notebooks (untuned baselines vs. HPO-tuned runs), so both
+ran the literal same implementation, differing only in the config dict
+passed in. heat_pinn_basic.ipynb (the untuned-baseline notebook) has since
+been removed as fully superseded; the remaining notebook,
+heat_pinn_tuned.ipynb, was renamed to heat_eqn_pinn.ipynb the same day this
+file was renamed. The history below predates both changes and is kept as-is
+for context.
 
 Every function below is a verbatim copy of what was already in
 heat_pinn_tuned.ipynb, with ONE exception: set_seed() is new (neither
