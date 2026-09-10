@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-August 22, 2026
+September 9, 2026
 
 ## Current Branch
 
@@ -20,6 +20,23 @@ required packages installed, including CUDA-enabled `torch 2.11.0+cu128`
 day -- only GitHub Desktop (with its own bundled, non-PATH git) was present
 before, so command-line git now works directly in a terminal/VSCode after a
 restart.
+
+**Project location changed September 9, 2026**: moved from
+`C:\Users\James\OneDrive\Documents\GitHub\HEAT_PINN` to
+`C:\dev\HEAT_PINN`. The OneDrive path was silently redirecting the
+Windows "Documents" folder into cloud sync (a "Known Folder Move"), which
+was uploading the entire 5 GB `.venv` (mostly the CUDA-bundled `torch`
+install) to OneDrive on every change -- not needed, since `.venv` is
+gitignored and fully reproducible from `requirements.txt`, and GitHub
+already serves as the real backup for the code itself. The old OneDrive
+copy was deleted after verifying the new location's git history,
+uncommitted changes, and a real GPU training smoke test all matched
+exactly. If GitHub Desktop can't find the repo, use its "Locate..."
+button (not "Clone Again") and point it at the new path. GitHub
+Desktop's own default clone location is still `Documents\GitHub`, which
+would put any *new* repo back inside OneDrive -- worth changing in
+GitHub Desktop's settings (Options -> General -> Local repository
+storage) if that hasn't been done yet.
 
 Prior MacBook-generated results will not be reused. All real Optuna sweeps
 and final comparisons will be run fresh on this machine so every reported
@@ -206,27 +223,40 @@ outright for unlucky hyperparameter draws; CN never does.
 chose `activation="tanh"`, confirming the August 21 decision to widen
 inverse's search space to include it (previously hardcoded to `"sin"`).
 
+**Superseded note (added September 9, 2026)**: the numbers above are from
+a real completed run and are directionally trustworthy, but they are
+*not* the numbers that should be quoted in the paper. Since this run,
+`heat_pinn_tuned.ipynb` has picked up cosmetic fixes, two new CPU-control
+timing cells, and a log-scale fix to the Optuna history plots (see
+"Session Update (September 9, 2026)" below) -- one more full 300-trial
+run is still needed to produce the actual final, citable numbers, now
+that the notebook reflects the cleaned-up code.
+
 ### Things that need to be addressed next session
 
-1. **The executed notebook is not yet committed.** `heat_pinn_tuned.ipynb`
-   now has real output but sits as an uncommitted change -- commit it
-   (with the real results) before anything else next session, so this
-   data isn't sitting only in the working tree.
+1. ~~The executed notebook is not yet committed.~~ Done -- committed
+   August 22/23 (`0a05409`), and the cleanup work since then (see below)
+   is committed and pushed as of September 9, 2026.
 2. **Decide the paper's framing for the inverse result.** CN-NLS matching
    or beating the tuned PINN, ~100x cheaper, is a legitimate finding but
    changes what the paper's conclusion should say for the inverse problem
-   specifically -- worth deciding how to present this (not something to
-   quietly smooth over) before writing the discussion/conclusion section.
-3. **Retire `heat_pinn_basic.ipynb`?** The blocking condition ("confirm
-   real baseline/tuned numbers look sane") is now satisfied -- numbers
-   above are sane, consistent with expectations, no NaNs in anything
-   actually reported. Ready to remove, pending explicit approval (a file
-   deletion, per `CLAUDE.md`).
-4. **CPU-control-timing run** -- still an open, undecided researcher
-   question (see "Known Issues to Investigate").
-5. **Smaller polish** -- `N_bc` naming, `README.md`, the dead `device`
-   variable in cell `16dcba3f`, minor cosmetic inconsistencies -- all
-   still untouched, still low-priority.
+   specifically -- still an open decision, worth making once the final
+   run's numbers are in (not something to quietly smooth over) before
+   writing the discussion/conclusion section.
+3. ~~Retire `heat_pinn_basic.ipynb`?~~ Done -- removed September 9, 2026,
+   recoverable from git history if ever needed.
+4. **CPU-control-timing run** -- decided (add it) and implemented
+   September 9, 2026. Two new cells, one per problem, reuse the exact
+   winning frozen config/seeds/data from the GPU final results with
+   `device=torch.device("cpu")` explicitly, so the same-hardware
+   comparison point CLAUDE.md's Experimental Integrity section calls for
+   is now in the notebook. Currently unexecuted -- will run for real
+   during the next full sweep.
+5. **Smaller polish** -- mostly done September 9, 2026: `N_bc`/`N_ic`
+   per-boundary clarity (see note below on a correction to this),
+   `lambda_pde` int/float consistency, and the dead `device` variable
+   (renamed to `default_device`) are all fixed. `README.md` is still a
+   placeholder -- still open.
 6. Consider whether the `NaN`-failure hyperparameter patterns are worth a
    deliberate closer look (which specific combinations diverge and why)
    as a small piece of the practical-complexity write-up, or just a
@@ -521,22 +551,85 @@ search-stage observations outside the search cell; and a JSON-validity
 check after the two small cleanup edits. No real Optuna sweep or full
 notebook execution was run.
 
+## Session Update (September 9, 2026)
+
+Two commits this session, both pushed to `origin/methodology-cleanup`.
+
+**Commit 1 (`dd7c2a6`)** -- pre-final-run cleanup, done before touching
+anything expensive:
+- Added two CPU-only control-timing cells (one per problem), reusing the
+  exact winning frozen config/seeds/data from each problem's GPU final
+  results with `device=torch.device("cpu")` explicitly.
+- Retired `heat_pinn_basic.ipynb` (fully superseded by `pinn_shared.py`).
+- Fixed `lambda_pde` int/float inconsistency between `FORWARD_FIXED_CONFIG`
+  and `INVERSE_FIXED_CONFIG`, and renamed the unused top-level `device`
+  variable to `default_device` (it was never threaded through to control
+  training -- each function auto-detects or takes an explicit override).
+- Added an `N_bc`/`N_ic` per-boundary clarity docstring/comment.
+  **Correction caught by the researcher**: the first version of this
+  comment incorrectly implied `N_ic` is also doubled like `N_bc`. Only
+  `N_bc` is (`sample_points()` samples it once each for `x=0` and `x=1`);
+  `N_ic` is a single set of points at `t=0` with no doubling. Fixed in
+  both `pinn_shared.py` and the notebook.
+
+**Commit 2 (pending, this session)** -- notebook documentation pass:
+- Fixed the Optuna `plot_optimization_history` plots (both problems) to
+  use a log-scale y-axis -- objective values span orders of magnitude, so
+  a linear axis crowded nearly every trial against the best-value line.
+  `plot_optimization_history` has no built-in log-scale option, so the
+  returned plotly figure is updated directly (`fig.update_yaxes(type="log")`).
+- Added 16 `**TODO:**` markdown placeholder cells throughout the notebook,
+  each a one-sentence prompt for the researcher to fill in with their own
+  explanation (methodology "why" cells now; result-interpretation cells
+  marked to wait until after the final run produces real numbers).
+  Deliberately not added everywhere -- skipped cells that already had
+  thorough inline code comments, to avoid padding.
+  Established workflow going forward: researcher writes a rough first
+  pass, Claude checks grammar/spelling and, more importantly, checks
+  factual claims against the actual code and flags anything inaccurate
+  rather than just polishing over it.
+- Notebook-level overview cell (the first TODO) filled in collaboratively
+  -- written, then revised twice for tone (cut em dashes, "pipeline",
+  italics, and AI-sounding rhetorical framing per researcher feedback) and
+  for a stronger opening line the researcher drafted and Claude polished.
+- Researcher then hand-edited comments throughout several cells directly
+  in VS Code (trimming several of Claude's longer rationale-comments down
+  to shorter, plainer versions, and adding new ones -- e.g. an Optuna
+  search-space explanation, a median-pruner explanation). Reviewed for
+  accuracy; all correct except the `N_bc`/`N_ic` case above.
+
+**Also this session**: the whole project was relocated from OneDrive to
+`C:\dev\HEAT_PINN` -- see "Hardware and Environment" above for why and
+how. Verified before deleting the old copy: git history, uncommitted
+changes, and a real GPU training smoke test all matched exactly at the
+new location.
+
+**Known small inconsistency, not yet fixed**: the log-scale plot fix's
+explanatory comment ended up only in the inverse cell (`7b5e8b69`) after
+the researcher's hand-editing pass -- the forward cell (`e8d3682d`) lost
+its version of that comment. Not a functional issue (the log-scale code
+itself is identical and correct in both), just a documentation asymmetry
+worth a one-line fix whenever convenient.
+
 ## Current Uncommitted Changes
 
-`heat_pinn_tuned.ipynb` -- now contains the real 300-trial run's full
-output (all cells executed, no errors, results summarized in "Real Sweep
-Results" above). Not yet committed; see that section's numbered list for
-what to do with it. `methodology-cleanup` is ahead of
-`origin/methodology-cleanup` by a few commits from August 21, not yet
-pushed (push via GitHub Desktop when ready).
+None as of this update -- both commits above are pushed. Working tree is
+clean, `methodology-cleanup` matches `origin/methodology-cleanup`.
 
 ## Next Recommended Step
 
-See "Real Sweep Results (August 22, 2026)" above for the full numbered
-list -- in short: commit the executed notebook first, then decide the
-inverse result's framing for the paper, then retire `heat_pinn_basic.ipynb`
-(its blocking condition is now satisfied), then the smaller open items
-(CPU-control-timing decision, polish list) whenever convenient.
+The notebook's methodology documentation is in good shape but not
+finished -- several `**TODO:**` cells are still unfilled (grep for
+`TODO` in `heat_pinn_tuned.ipynb`). Once the researcher is satisfied with
+that pass (or decides to finish it after the run instead -- either order
+works since markdown edits never require a rerun), the next real blocker
+is the **final full run**: 300 trials for both problems, all sensitivity
+sweeps, now including the two new CPU-control cells and the log-scale
+plot fix. This is the expensive step (roughly 1.5-2 hours based on the
+August 22 run) and needs explicit researcher approval to kick off, per
+`CLAUDE.md`. After that: commit the executed notebook, decide the
+inverse result's paper framing (still open, see item 2 above), write
+`README.md`, and then the paper itself.
 
 ## Suggested First Message to Claude
 
