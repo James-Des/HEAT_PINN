@@ -1,5 +1,11 @@
 # Project Status
 
+**File rename note (September 10, 2026)**: `pinn_shared.py` -> `pinn_core.py`
+and `heat_pinn_tuned.ipynb` -> `heat_eqn_pinn.ipynb`. Everything below this
+line was written before the rename and still uses the old names -- treat
+this log as a historical record, not current file paths. See `CLAUDE.md`
+for the current file list.
+
 ## Last Updated
 
 September 9, 2026

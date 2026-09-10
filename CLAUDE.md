@@ -95,10 +95,15 @@ acceptable -- CN does not benefit from GPU parallelism at this problem size
 
 ## Current Important Files
 
-- `pinn_shared.py`: shared PINN, inverse, and Crank-Nicolson functions.
-- `heat_pinn_basic.ipynb`: literature-informed baseline experiments.
-- `heat_pinn_tuned.ipynb`: Optuna tuning and tuned comparisons.
-- `James_Desjarlais_PINN_Final.pdf`: original submitted thesis.
+- `pinn_core.py`: PINN, inverse, and Crank-Nicolson functions (renamed from
+  `pinn_shared.py` on 2026-09-10; "shared" stopped being accurate once
+  `heat_pinn_basic.ipynb` was retired and only one notebook uses it).
+- `heat_eqn_pinn.ipynb`: Optuna tuning and baseline/tuned/classical
+  comparisons (renamed from `heat_pinn_tuned.ipynb` on 2026-09-10, for the
+  same reason -- it's the only notebook in the repo now).
+- `James_Desjarlais_PINN_Final.pdf`: original submitted thesis (undergrad
+  coursework; superseded by everything in this repo, kept for provenance --
+  see `README.md`).
 - `PROJECT_STATUS.md`: current project state and handoff information.
 
 Optuna database and pickle files may exist locally but are intentionally ignored
