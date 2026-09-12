@@ -8,13 +8,91 @@ for the current file list.
 
 ## Last Updated
 
-September 9, 2026
+September 11, 2026
 
 ## Current Branch
 
 `methodology-cleanup`
 
-The original project is preserved on the `main` branch.
+`main` is now a curated public snapshot kept in sync with
+`methodology-cleanup` (minus `CLAUDE.md`/`PROJECT_STATUS.md`, which are
+intentionally not public) -- see "Session Update (September 11, 2026)"
+below for the current branching model. It is no longer "the original
+project" -- that framing is stale as of the repo going public this
+session.
+
+## Session Update (September 11, 2026)
+
+**Repo went public**: the researcher made the GitHub repo public. This
+changed the branching model:
+- `main` is now a curated public snapshot (fast-forwarded/merged from
+  `methodology-cleanup`, then `CLAUDE.md`/`PROJECT_STATUS.md` stripped and
+  gitignored on `main` only -- these internal working files are
+  intentionally not public). Future syncs to `main` will hit a
+  modify/delete conflict on those two files each time, which is expected;
+  resolve by re-deleting them on `main`'s side.
+- `methodology-cleanup` remains the full working branch, unchanged in
+  spirit -- still has both files, still where all real work happens.
+- `main` currently sits 4 commits behind `methodology-cleanup` (last
+  synced at `a1a35b3`); not yet re-synced pending more comment cleanup.
+
+**Renames** (`a1a35b3`): `pinn_shared.py` -> `pinn_core.py`,
+`heat_pinn_tuned.ipynb` -> `heat_eqn_pinn.ipynb` -- "shared" stopped being
+accurate once `heat_pinn_basic.ipynb` was retired. `README.md` rewritten:
+frames the project as independent research continuing past undergrad, adds
+a "Project history" section explaining the thesis PDF is the pre-cleanup
+starting point (kept for provenance, not current methodology).
+
+**Forward comparison table fixes** (`43e3c6e`, `e48cfc0`): two real gaps
+found and fixed, not just cosmetic --
+- Baseline never tracked per-seed L-inf error; Tuned never tracked
+  per-seed inference time or L-inf across its 5 winning-config models.
+  Both added, mirroring the existing per-seed rel-L2 pattern.
+- Final table restyled: dropped the single-representative-run row
+  (still printed separately near the plots, just not duplicated in the
+  summary table). Every Baseline/Tuned cell is now a real mean +/- std;
+  FD stays single-valued (deterministic, no seed dependence).
+- FD convergence study (`e48cfc0`): was `fd_solver(nx, nx*2)` with no
+  documented rationale, inconsistent with the final-reporting cell's
+  `fd_solver(1000, 1000)`. Fixed to `fd_solver(nx, nx)`, widened
+  `N_values` to `[10, 50, 100, 500, 1000, 5000]` so the sweep explicitly
+  includes the actual reported resolution. Verified empirically: order-2
+  convergence holds cleanly across the whole range.
+
+**Notebook tooling issue found and partially fixed**: the notebook had
+grown to ~920KB (embedded cell outputs), exceeding the 25K-token limit
+Claude's `NotebookEdit` tool needs to read it before editing. This forced
+raw out-of-band Python-script edits with no live sync to an open VS Code
+session, which caused a real edit conflict this session -- the researcher
+lost some unsaved manual comment edits when the file was reloaded/edited
+externally. Acknowledged as a minor, non-recoverable loss (not committed,
+not recoverable from git). Fix applied (`5248a2f`): cleared all cell
+outputs, shrinking the file to ~70KB / ~27,643 tokens -- still about 10%
+over the tool's limit (confirmed content-driven via a compact-JSON test,
+not a formatting issue), so `NotebookEdit` is still not usable yet.
+**Until the notebook drops under the token limit**, follow this protocol
+when editing it together: save any pending VS Code changes before Claude
+edits the file; reload/revert the file in VS Code after Claude edits it.
+Re-check periodically whether ongoing comment trimming has closed the gap
+-- once it does, normal live-synced editing resumes automatically.
+
+**Comment cleanup in progress** (researcher-driven, ongoing): established
+convention this session -- no em dashes in comments (or any written text)
+for this researcher; use periods/commas instead. Two comment
+simplifications proposed but NOT YET applied (still using old wording as
+of this update): the "Move inputs to whichever device..." comment (forward
+plotting cell) and the "Every Baseline/Tuned number below..." comment
+(final comparison table cell) -- both have condensed replacements already
+drafted in chat history, just need the researcher's go-ahead to apply.
+
+**Outside this repo**: the researcher's GitHub profile README
+(`James-Des/James-Des`) was also updated this session -- added HEAT_PINN
+as the top-listed project, rewrote the bio (reflects graduation, drops
+Quant Research/Trading and "seeking internships" framing, adds Data
+Science/FDE/Simulation SWE/ML/Scientific Computing, and calls out
+numerical PDE methods/physics-informed ML/Monte Carlo methods/deep
+learning as specialties), and added SciPy/Optuna/Matplotlib to the skills
+list. Not tracked in this repo's history.
 
 ## Hardware and Environment
 
@@ -619,23 +697,27 @@ worth a one-line fix whenever convenient.
 
 ## Current Uncommitted Changes
 
-None as of this update -- both commits above are pushed. Working tree is
-clean, `methodology-cleanup` matches `origin/methodology-cleanup`.
+None as of this update -- everything through the September 11, 2026
+session is committed and pushed to `origin/methodology-cleanup` (up to
+`5248a2f`). `main` is 4 commits behind, not yet re-synced.
 
 ## Next Recommended Step
 
-The notebook's methodology documentation is in good shape but not
-finished -- several `**TODO:**` cells are still unfilled (grep for
-`TODO` in `heat_pinn_tuned.ipynb`). Once the researcher is satisfied with
+Continue the researcher-driven comment-cleanup pass on `heat_eqn_pinn.ipynb`
+(in progress) -- apply the two pending comment simplifications noted in
+"Session Update (September 11, 2026)" above if still wanted, and keep the
+save-before-edit/reload-after-edit protocol until the notebook drops under
+NotebookEdit's token limit. Several `**TODO:**` markdown cells are also
+still unfilled (grep for `TODO`). Once the researcher is satisfied with
 that pass (or decides to finish it after the run instead -- either order
-works since markdown edits never require a rerun), the next real blocker
-is the **final full run**: 300 trials for both problems, all sensitivity
-sweeps, now including the two new CPU-control cells and the log-scale
-plot fix. This is the expensive step (roughly 1.5-2 hours based on the
-August 22 run) and needs explicit researcher approval to kick off, per
-`CLAUDE.md`. After that: commit the executed notebook, decide the
-inverse result's paper framing (still open, see item 2 above), write
-`README.md`, and then the paper itself.
+works since these edits never require a rerun), the next real blocker is
+the **final full run**: 300 trials for both problems, all sensitivity
+sweeps, including the two CPU-control cells, the log-scale plot fix, and
+this session's table/convergence-study fixes. This is the expensive step
+(roughly 1.5-2 hours based on the August 22 run) and needs explicit
+researcher approval to kick off, per `CLAUDE.md`. After that: commit the
+executed notebook, re-sync `main`, decide the inverse result's paper
+framing (still open, see item 2 further up), and then the paper itself.
 
 ## Suggested First Message to Claude
 
