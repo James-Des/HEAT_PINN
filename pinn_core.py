@@ -1,43 +1,21 @@
 """
-pinn_core.py (renamed from pinn_shared.py on 2026-09-10)
+Core implementation for the heat-equation PINN vs. Crank-Nicolson study.
 
-Core logic for the heat-equation PINN vs. Crank-Nicolson study. Originally
-shared between two notebooks (untuned baselines vs. HPO-tuned runs), so both
-ran the literal same implementation, differing only in the config dict
-passed in. heat_pinn_basic.ipynb (the untuned-baseline notebook) has since
-been removed as fully superseded; the remaining notebook,
-heat_pinn_tuned.ipynb, was renamed to heat_eqn_pinn.ipynb the same day this
-file was renamed. The history below predates both changes and is kept as-is
-for context.
+The problem is the 1D heat equation u_t = alpha * u_xx on the unit domain,
+with u(0, t) = u(1, t) = 0 and u(x, 0) = sin(pi * x). It has a known exact
+solution, u(x, t) = sin(pi * x) * exp(-alpha * pi^2 * t), which every
+accuracy number in the study is measured against.
 
-Every function below is a verbatim copy of what was already in
-heat_pinn_tuned.ipynb, with ONE exception: set_seed() is new (neither
-notebook had a reusable seeding function; heat_pinn_basic.ipynb had no
-seeding at all). Everywhere else, changes are marked "# NEW" inline and
-are additive only -- nothing was rewritten, reformatted, or restructured.
+Two problems are studied:
+  Forward: alpha is known, solve for the temperature field u.
+  Inverse: alpha is unknown, recover it from sparse, noisy measurements.
 
-Changes, and why each was necessary:
-  1. set_seed(seed) -- new function. Call before any sampling/training.
-  2. train_inverse() -- added a local `import optuna` inside the
-     trial-pruning branch. This isn't a style choice: once this function
-     moved out of the notebook, `optuna.exceptions.TrialPruned()` needs
-     `optuna` bound in *this* module's namespace, not the notebook's --
-     Python resolves free variables against the module a function was
-     defined in. Also added an early-stop diagnostic after the L-BFGS
-     phase (flagging heat_pinn_basic's observed 3-call termination), and
-     added `alpha_error` / `lbfgs_calls` to the return dict (additive,
-     nothing removed).
-  3. cn_nls_baseline() -- added wall-clock timing (the original had
-     none). Return signature is UNCHANGED (still a 3-tuple) so existing
-     call sites that unpack `best_alpha, mse_history, alpha_candidates =
-     cn_nls_baseline(...)` do not need to change.
-  4. train_forward() -- moved here from heat_pinn_tuned.ipynb (forward
-     counterpart to train_inverse). Same local `import optuna` fix as
-     train_inverse, and for the same reason.
+Each is solved two ways, a neural network and a classical solver:
+  PINN:           train_forward, train_inverse
+  Crank-Nicolson: fd_solver, cn_nls_baseline
 
-fd_solver(), pinn_architecture, sample_points, generate_noisy_data,
-compute_loss, and compute_loss_inverse are byte-for-byte what was already
-in heat_pinn_tuned.ipynb -- no reformatting, no renamed variables.
+heat_eqn_pinn.ipynb drives all of it: the Optuna hyperparameter search, the
+baseline-vs-tuned PINN comparisons, and the final accuracy and cost tables.
 """
 
 import time
@@ -51,12 +29,13 @@ from scipy.sparse.linalg import splu
 
 
 def set_seed(seed: int) -> None:
-    """NEW. Seed torch and numpy. Call at the start of every experiment
-    you intend to report a number from."""
+    """Seed torch and numpy. Call before any run whose numbers get reported."""
     torch.manual_seed(seed)
     np.random.seed(seed)
 
 class pinn_architecture(nn.Module):
+    """Fully connected network mapping (x, t) to temperature u."""
+
     def __init__(self, hidden_size=20, n_layers=4, activation='tanh'):
         super().__init__()
         self.input_layer = nn.Linear(2, hidden_size)
@@ -82,8 +61,11 @@ class pinn_architecture(nn.Module):
         return self.output_layer(out)
 
 def sample_points(N_f, N_bc, N_ic):
-    # N_bc is points PER boundary (x=0 and x=1 each get N_bc), so the
-    # actual total boundary-point count sampled below is 2 * N_bc.
+    """Draw random collocation, boundary, and initial-condition points.
+
+    N_bc is per boundary (x=0 and x=1 each get N_bc), so the total number
+    of boundary points returned is 2 * N_bc. N_ic is not doubled.
+    """
     x_f = torch.rand(N_f ,1)
     t_f = torch.rand(N_f, 1)
     
@@ -100,6 +82,11 @@ def sample_points(N_f, N_bc, N_ic):
 
 
 def generate_noisy_data(inverse_config):
+    """Sample the exact solution at random points and add Gaussian noise.
+
+    These are the synthetic measurements the inverse problem recovers
+    alpha from.
+    """
     x_obs = torch.rand(inverse_config["N_obs"], 1)
     t_obs = torch.rand(inverse_config["N_obs"], 1)
     
@@ -113,6 +100,10 @@ def generate_noisy_data(inverse_config):
 
 def compute_loss(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic,
                  lambda_pde=1.0, lambda_bc=1.0, lambda_ic=1.0):
+    """Weighted forward loss: PDE residual, boundary, and initial condition.
+
+    Returns (total, pde, bc, ic) so each term can be tracked separately.
+    """
     x_f.requires_grad_(True)
     t_f.requires_grad_(True)
     
@@ -144,6 +135,12 @@ def compute_loss(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic,
     return total_loss, pde_loss, bc_loss, ic_loss
 
 def train_forward(forward_config, print_training=True, trial=None, device=None):
+    """Train a PINN on the forward problem, with alpha known.
+
+    Adam first, then L-BFGS to refine. Returns the trained model, per-term
+    loss histories, training time, and relative L2 error on the validation
+    grid. Pass a trial to enable Optuna pruning.
+    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -182,12 +179,9 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
         total_loss.backward()
         optimizer.step()
 
-        # Store detached GPU tensors during the loop instead of calling
-        # .item() every iteration -- .item() forces a CPU<->GPU sync that
-        # stalls the GPU pipeline. Each of these is a fresh tensor from
-        # this iteration's forward pass (not a Parameter mutated in place),
-        # so plain .detach() is safe -- converted to floats once, in bulk,
-        # after training finishes.
+        # Keep losses as GPU tensors here. Calling .item() every iteration
+        # would force a CPU/GPU sync and stall training; they get converted
+        # to floats in bulk once training finishes.
         history_total.append(total_loss.detach())
         history_pde.append(pde_loss.detach())
         history_bc.append(bc_loss.detach())
@@ -197,21 +191,12 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
             print(f"Iter {i} | Total: {total_loss.item():.4e} | PDE: {pde_loss.item():.4e} | BC: {bc_loss.item():.4e} | IC: {ic_loss.item():.4e}")
 
         if trial is not None and i % 200 == 0:
-            import optuna  # local import: only needed on this path, and must be
-                            # bound in this module now that train_forward no longer
-                            # lives in the same notebook namespace as `import optuna`
-            # Report the UNWEIGHTED physics/boundary/initial residual,
-            # averaged over the preceding 200 iterations, instead of the
-            # single-instant weighted total_loss. Unweighted because
-            # lambda_bc/lambda_ic are searched per-trial over a huge
-            # log-uniform range, so comparing raw weighted total_loss
-            # across trials compares numbers that differ for reasons
-            # having nothing to do with fit quality. Windowed (not just
-            # the instantaneous value at this step) because a single
-            # noisy reading can unfairly prune a trial that's mid-
-            # fluctuation rather than genuinely behind -- averaging over
-            # the last 200 iterations only flags trials that are
-            # persistently worse, not momentarily unlucky.
+            import optuna  # only needed on the pruning path
+            # Prune on the unweighted PDE/BC/IC residual, not the weighted
+            # total loss: lambda_bc and lambda_ic are searched per trial over
+            # a wide range, so weighted losses are not comparable between
+            # trials. Averaged over the last 200 iterations so a single noisy
+            # reading cannot prune a trial that is only momentarily behind.
             window_pde = torch.stack(history_pde[-200:])
             window_bc = torch.stack(history_bc[-200:])
             window_ic = torch.stack(history_ic[-200:])
@@ -248,21 +233,17 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
 
     pinn_train_time = time.time() - pinn_train_start
 
-    # Convert the accumulated per-iteration loss tensors to plain floats
-    # once, in bulk, now that training is done -- a single CPU<->GPU sync
-    # instead of one every iteration.
+    # Convert the accumulated loss tensors to plain floats in bulk now that
+    # training is done, a single CPU/GPU sync instead of one per iteration.
     history_total = torch.stack(history_total).cpu().tolist()
     history_pde = torch.stack(history_pde).cpu().tolist()
     history_bc = torch.stack(history_bc).cpu().tolist()
     history_ic = torch.stack(history_ic).cpu().tolist()
 
-    # Validation grid for HPO/model-selection (Optuna objective + the
-    # top-configs retrain loop below) -- offset by half a grid cell from
-    # the final comparison cell's grid (torch.linspace(0, 1, 1000)), so no
-    # point used to pick a winning model is ever reused as a "final" test
-    # point. Without this offset, the same 1000x1000 points would both
-    # choose the winning hyperparameters and report how accurate the
-    # winner is, which biases the reported accuracy optimistically.
+    # Validation grid used for hyperparameter selection, offset by half a
+    # cell from the test grid the notebook reports final accuracy on. Without
+    # the offset the same points would both pick the winning model and score
+    # it, which makes the reported accuracy look better than it is.
     x_eval = torch.linspace(0.0005, 0.9995, 1000, device=device)
     t_eval = torch.linspace(0.0005, 0.9995, 1000, device=device)
     X_eval, T_eval = torch.meshgrid(x_eval, t_eval, indexing='ij')
@@ -276,7 +257,6 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
 
     
     print(f"\nPINN total training time: {pinn_train_time:.2f}s")
-    #print(f"Adam iterations: {adam_iters} | L-BFGS closure calls: {lbfgs_iter[0]}")
     print(f"Rel L2 error: {rel_l2:.4e}")
 
     return {
@@ -292,6 +272,11 @@ def train_forward(forward_config, print_training=True, trial=None, device=None):
 
 def compute_loss_inverse(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic, x_obs, t_obs, u_obs,
                          lambda_pde=1.0, lambda_bc=1.0, lambda_ic=1.0, lambda_data=1.0):
+    """Forward loss plus a data term measuring fit to the noisy observations.
+
+    The data term is what makes alpha identifiable; the physics terms alone
+    can be satisfied by the wrong alpha.
+    """
     x_f.requires_grad_(True)
     t_f.requires_grad_(True)
     
@@ -319,6 +304,12 @@ def compute_loss_inverse(model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic, x_obs, 
     return total_loss, pde_loss, bc_loss, ic_loss, data_loss
 
 def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, trial=None, device=None):
+    """Train a PINN on the inverse problem, recovering alpha from observations.
+
+    Learns the network weights and alpha jointly. Returns the recovered
+    alpha, its error against true_alpha, loss and alpha histories, and
+    training time. Pass a trial to enable Optuna pruning.
+    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -329,12 +320,9 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
     lambda_data = inverse_config.get("lambda_data",  1.0)
 
     model = pinn_architecture(inverse_config["hidden_size"], inverse_config["n_layers"], activation).to(device)
-    # log_alpha, not alpha, is the actual learnable parameter -- this
-    # guarantees the physical diffusivity (exp(log_alpha), computed fresh
-    # wherever alpha is needed below) can never go negative or hit zero,
-    # for any value log_alpha takes during optimization. inverse_config
-    # ["alpha_init"] is still the physical initial guess (must stay > 0);
-    # only its log is what actually gets optimized.
+    # Optimize log_alpha rather than alpha directly, so the recovered
+    # diffusivity exp(log_alpha) stays strictly positive no matter what the
+    # optimizer does. alpha_init is still the physical guess and must be > 0.
     log_alpha = nn.Parameter(torch.log(torch.tensor(inverse_config["alpha_init"], device=device)))
     optimizer = torch.optim.Adam(list(model.parameters()) + [log_alpha], lr=inverse_config["adam_lr"])
 
@@ -365,17 +353,9 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
         total_loss.backward()
         optimizer.step()
 
-        # Store detached GPU tensors during the loop instead of calling
-        # .item() every iteration -- .item() forces a CPU<->GPU sync that
-        # stalls the GPU pipeline. The loss tensors are fresh objects from
-        # this iteration's forward pass, so plain .detach() is safe. alpha
-        # is now also a fresh tensor each iteration (torch.exp allocates
-        # new storage, it does not return a view into log_alpha), so it no
-        # longer aliases anything the optimizer mutates in place the way
-        # the raw Parameter used to -- .clone() is technically no longer
-        # required here, but kept anyway for defensive consistency with
-        # the same pattern used everywhere else in this loop. Converted to
-        # floats once, in bulk, after training finishes.
+        # Same reason as the forward loop: keep these as GPU tensors and
+        # convert in bulk later. alpha keeps a .clone() defensively, from
+        # when it was a Parameter the optimizer updated in place.
         history_total.append(total_loss.detach())
         history_pde.append(pde_loss.detach())
         history_bc.append(bc_loss.detach())
@@ -387,25 +367,12 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
             print(f"Iter {i} | Total: {total_loss.item():.4e} | PDE: {pde_loss.item():.4e} | BC: {bc_loss.item():.4e} | IC: {ic_loss.item():.4e} | Alpha: {alpha.item():.4f}")
 
         if trial is not None and i % 200 == 0:
-            import optuna  # local import: only needed on this path, and must be
-                            # bound in this module now that train_inverse no longer
-                            # lives in the same notebook namespace as `import optuna`
-            # Report alpha error (the SAME quantity objective_inverse
-            # ultimately selects the winning trial on), averaged over the
-            # preceding 200 iterations, instead of weighted total_loss.
-            # Not the unweighted physics/boundary/initial/data residual
-            # either: the PDE residual alone cannot distinguish a
-            # correctly-identified alpha from a self-consistent but wrong
-            # one (a flexible enough network can satisfy the PDE for the
-            # wrong alpha too), and data_loss -- the one term that actually
-            # disambiguates alpha -- would just be one of several equally-
-            # weighted terms in an unweighted sum, with no guarantee it
-            # carries enough influence to matter. alpha_error sidesteps
-            # that identifiability gap by measuring the thing we actually
-            # care about directly. Windowed for the same reason as
-            # forward: a single instant can be unlucky (alpha does not
-            # move monotonically), so average over the last 200 iterations
-            # to only flag trials that are persistently off.
+            import optuna  # only needed on the pruning path
+            # Prune on alpha error, the same quantity the final trial
+            # selection uses. The residual alone is not enough here: a
+            # flexible network can satisfy the PDE for the wrong alpha, and
+            # only the data term disambiguates it. Averaged over the last 200
+            # iterations because alpha does not converge monotonically.
             window_alpha = torch.stack(history_alpha[-200:])
             alpha_error_avg = (window_alpha - inverse_config["true_alpha"]).abs().mean().item()
             trial.report(alpha_error_avg, i)
@@ -419,9 +386,9 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
 
     def closure():
         optimizer_lbfgs.zero_grad()
-        # Local to this closure -- does NOT update the outer-scope `alpha`
-        # below, since a plain `=` inside a nested function creates its own
-        # local binding rather than reaching back into the enclosing scope.
+        # Local to this closure. A plain assignment inside a nested function
+        # creates its own binding, so this does not update the outer alpha;
+        # that gets recomputed after L-BFGS finishes.
         alpha = torch.exp(log_alpha)
         total_loss, pde_loss, bc_loss, ic_loss, data_loss = compute_loss_inverse(
             model, alpha, x_f, t_f, x_bc, t_bc, x_ic, t_ic, x_obs, t_obs, u_obs,
@@ -442,25 +409,19 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
 
     optimizer_lbfgs.step(closure)
 
-    # Recompute alpha from the final log_alpha now that L-BFGS is done.
-    # Without this, alpha would still be whatever it was at the end of the
-    # Adam loop above -- the closure's alpha is scoped to the closure only
-    # (see comment there) and never updates this name, so every L-BFGS
-    # step would otherwise be silently ignored by everything below
-    # (the diagnostic, the final print, and the returned "alpha" value).
+    # Recompute alpha now that L-BFGS is done. The closure's alpha is local
+    # to the closure, so without this every L-BFGS update would be silently
+    # dropped from the returned result.
     alpha = torch.exp(log_alpha)
 
-    # --- DIAGNOSTIC (new): flag suspiciously early L-BFGS termination ---
-    # PyTorch's LBFGS can legitimately stop in a handful of calls if
-    # tolerance_grad/tolerance_change are satisfied immediately, but a
-    # single-digit call count after a long Adam phase is worth a second
-    # look rather than silently trusting the result.
+    # Flag suspiciously early L-BFGS termination. PyTorch's LBFGS can
+    # legitimately stop in a handful of calls if its tolerances are met
+    # immediately, but a single-digit call count after a long Adam phase is
+    # worth a second look rather than trusting silently.
     if lbfgs_iter[0] < 10:
         grads = [p.grad.flatten() for p in model.parameters() if p.grad is not None]
-        # log_alpha, not alpha: alpha here was just recomputed fresh above
-        # and never participated in a backward() call itself, so it has no
-        # .grad populated -- log_alpha is the actual leaf Parameter that
-        # accumulates gradients.
+        # log_alpha, not alpha: alpha was just recomputed and never went
+        # through backward(), so only log_alpha carries a gradient.
         if log_alpha.grad is not None:
             grads.append(log_alpha.grad.flatten())
         final_grad_norm = torch.norm(torch.cat(grads)).item() if grads else float('nan')
@@ -471,9 +432,8 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
 
     inverse_train_time = time.time() - inverse_train_start
 
-    # Convert the accumulated per-iteration tensors to plain floats once,
-    # in bulk, now that training is done -- a single CPU<->GPU sync
-    # instead of one every iteration.
+    # Convert the accumulated loss tensors to plain floats in bulk now that
+    # training is done, a single CPU/GPU sync instead of one per iteration.
     history_total = torch.stack(history_total).cpu().tolist()
     history_pde = torch.stack(history_pde).cpu().tolist()
     history_bc = torch.stack(history_bc).cpu().tolist()
@@ -503,6 +463,12 @@ def train_inverse(inverse_config, x_obs, t_obs, u_obs, print_training=True, tria
     }
 
 def fd_solver( N_x, N_t, alpha = 0.4, compute_error = True):
+    """Crank-Nicolson solver for the forward problem.
+
+    Second-order accurate in space and time. The tridiagonal system is
+    factored once and reused across all timesteps. Returns (x, t, u, error),
+    where error is None if compute_error is False.
+    """
     dx = 1 / (N_x - 1)
     dt = 1 / (N_t - 1)
     
@@ -537,15 +503,19 @@ def fd_solver( N_x, N_t, alpha = 0.4, compute_error = True):
     return x, t, u, error
 
 
-from scipy.interpolate import RegularGridInterpolator
-
 def cn_nls_baseline(inverse_config, x_obs, t_obs, u_obs):
-    
+    """Classical inverse estimator: recover alpha by brute-force search.
+
+    Runs fd_solver for each candidate alpha, interpolates onto the
+    observation points, and keeps whichever candidate minimizes mean squared
+    error against the observations. Returns the best alpha, the full MSE
+    curve, the candidates tried, and total runtime.
+    """
     alpha_candidates = np.linspace(0.01, 1.0, inverse_config.get("n_alpha_candidates", 200))
     
     mse_history = []
     
-    cn_nls_start = time.time()  # NEW: added timing (original had none)
+    cn_nls_start = time.time()
     
     for alpha_guess in alpha_candidates:
         x, t, u_guess, _ = fd_solver( N_x = 200, N_t = 200, alpha = alpha_guess, compute_error = False)
@@ -563,15 +533,12 @@ def cn_nls_baseline(inverse_config, x_obs, t_obs, u_obs):
         
         mse_history.append(mse)
     
-    cn_nls_time = time.time() - cn_nls_start  # NEW
+    cn_nls_time = time.time() - cn_nls_start
     
     best_mse_index = np.argmin(mse_history)
     
     best_alpha_guess = alpha_candidates[best_mse_index]
     
-    print(f"CN-NLS total runtime: {cn_nls_time:.2f}s")  # NEW
+    print(f"CN-NLS total runtime: {cn_nls_time:.2f}s")
     
     return best_alpha_guess, mse_history, alpha_candidates, cn_nls_time
-
-
-    
