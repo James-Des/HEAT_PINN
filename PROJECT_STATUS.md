@@ -701,6 +701,22 @@ None as of this update -- everything through the September 11, 2026
 session is committed and pushed to `origin/methodology-cleanup` (up to
 `5248a2f`). `main` is 4 commits behind, not yet re-synced.
 
+## Open TODO: AI-assistance disclaimer
+
+Add a "Development notes" section to `README.md` describing how the project
+was built: original PINN/CN implementations are the author's own from the
+undergraduate thesis; the methodological cleanup since then was done with
+Claude Code as an assistant (CN solver performance, train/test separation,
+the three-stage inverse evaluation, Optuna pruning signals, sensitivity
+sweeps), with the author directing and reviewing every change and running
+all reported results.
+
+Decided September 23, 2026 that "cleanup, plotting, and markdown only" would
+understate this, and that the public commit history documents the real scope
+in detail, so the disclaimer needs to match it. This is also the reason not
+to rewrite the git history to scrub AI attribution: the history is the
+evidence backing the disclaimer.
+
 ## Next Recommended Step
 
 Continue the researcher-driven comment-cleanup pass on `heat_eqn_pinn.ipynb`
