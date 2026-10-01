@@ -14,8 +14,11 @@ Each is solved two ways, a neural network and a classical solver:
   PINN:           train_forward, train_inverse
   Crank-Nicolson: fd_solver, cn_nls_baseline
 
-heat_eqn_pinn.ipynb drives all of it: the Optuna hyperparameter search, the
-baseline-vs-tuned PINN comparisons, and the final accuracy and cost tables.
+Two notebooks drive all of it, one per problem, each running the Optuna
+hyperparameter search, the baseline-vs-tuned PINN comparisons, and the
+final accuracy and cost tables for its own problem:
+  heat_eqn_pinn_forward.ipynb
+  heat_eqn_pinn_inverse.ipynb
 """
 
 import time

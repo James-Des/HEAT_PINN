@@ -96,15 +96,24 @@ acceptable -- CN does not benefit from GPU parallelism at this problem size
 ## Current Important Files
 
 - `pinn_core.py`: PINN, inverse, and Crank-Nicolson functions (renamed from
-  `pinn_shared.py` on 2026-09-10; "shared" stopped being accurate once
-  `heat_pinn_basic.ipynb` was retired and only one notebook uses it).
-- `heat_eqn_pinn.ipynb`: Optuna tuning and baseline/tuned/classical
-  comparisons (renamed from `heat_pinn_tuned.ipynb` on 2026-09-10, for the
-  same reason -- it's the only notebook in the repo now).
+  `pinn_shared.py` on 2026-09-10). Both notebooks below import from it.
+- `heat_eqn_pinn_forward.ipynb`: the forward problem. Baseline PINN, Optuna
+  tuning, Crank-Nicolson comparison, the FD convergence study, and the
+  forward `true_alpha` sensitivity sweep.
+- `heat_eqn_pinn_inverse.ipynb`: the inverse problem. Baseline PINN, Optuna
+  tuning via the three-stage search/confirmation/final-evaluation split,
+  CN-NLS comparison, and the noise, observation-count, and `true_alpha`
+  sensitivity sweeps.
 - `James_Desjarlais_PINN_Final.pdf`: original submitted thesis (undergrad
   coursework; superseded by everything in this repo, kept for provenance --
   see `README.md`).
 - `PROJECT_STATUS.md`: current project state and handoff information.
+
+Both notebooks were split out of the single `heat_eqn_pinn.ipynb` on
+2026-10-01 (itself renamed from `heat_pinn_tuned.ipynb` on 2026-09-10).
+They share no runtime state and can be run independently, in either order.
+Each imports the same setup cell from `pinn_core.py`. The pre-split
+combined notebook is recoverable at the `pre-notebook-split` Git tag.
 
 Optuna database and pickle files may exist locally but are intentionally ignored
 by Git.

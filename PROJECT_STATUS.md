@@ -1,14 +1,16 @@
 # Project Status
 
-**File rename note (September 10, 2026)**: `pinn_shared.py` -> `pinn_core.py`
-and `heat_pinn_tuned.ipynb` -> `heat_eqn_pinn.ipynb`. Everything below this
-line was written before the rename and still uses the old names -- treat
-this log as a historical record, not current file paths. See `CLAUDE.md`
-for the current file list.
+**File history note**: `pinn_shared.py` -> `pinn_core.py` and
+`heat_pinn_tuned.ipynb` -> `heat_eqn_pinn.ipynb` (September 10, 2026),
+then `heat_eqn_pinn.ipynb` split into `heat_eqn_pinn_forward.ipynb` and
+`heat_eqn_pinn_inverse.ipynb` (October 1, 2026). Dated sections below were
+written before these changes and still use the old names, including their
+tooling notes. Treat this log as a historical record, not current file
+paths or current tool limits. See `CLAUDE.md` for the current file list.
 
 ## Last Updated
 
-September 11, 2026
+October 1, 2026
 
 ## Current Branch
 
@@ -20,6 +22,66 @@ intentionally not public) -- see "Session Update (September 11, 2026)"
 below for the current branching model. It is no longer "the original
 project" -- that framing is stale as of the repo going public this
 session.
+
+## Session Update (October 1, 2026)
+
+**Notebook split**: `heat_eqn_pinn.ipynb` (46 cells) split into
+`heat_eqn_pinn_forward.ipynb` (23 cells, originals 0-22) and
+`heat_eqn_pinn_inverse.ipynb` (24 cells: the shared imports cell plus
+originals 23-45). Reasons, in order of weight: the combined notebook
+exceeded `NotebookEdit`'s token limit, blocking live-synced editing; a
+reader or reviewer can now run just one problem; and splitting before the
+final run avoids migrating executed outputs afterward, while letting the
+two 300-trial sweeps run independently so a crash in one does not cost the
+other.
+
+**The split was safe because the two halves were already independent.** A
+dependency analysis across the old `INVERSE START` boundary found the
+inverse half read zero forward-half data: no `x_test`/`t_test`/`X_test`/
+`T_test`, no `FORWARD_FIXED_CONFIG`, no `fd_solver`. The single
+`forward_config` hit was inside a comment. An initial grep flagged about
+20 shared names, but all were loop and comprehension variables that each
+half reassigns itself. `CLAUDE.md`'s requirement that PINN and CN-NLS use
+identical inverse observations was confirmed to live entirely inside the
+inverse half (cell 36 reads them off `final_inverse_results`), so the
+split cannot endanger it.
+
+**Verification run** (all passed, no cell contents changed):
+per-cell SHA256 against a fingerprint recorded before anything moved, all
+47 cell mappings byte-identical; concatenated-source byte equality
+(53,453 chars in and out); coverage showing all 46 originals present with
+exactly one intentional duplicate, the imports cell; `nbformat.validate()`
+and metadata/`nbformat 4.5` identical on both; a pyflakes undefined-name
+scan returning zero for the original and for both halves, which is the
+real proof each notebook stands alone; and an imports-only execution of
+each notebook's setup cell, exit 0 with CUDA detected. Optuna sweep cells
+were deliberately not executed, to protect the existing study databases.
+One process note: the first hash run reported 14 mismatches, which turned
+out to be a bug in the verification script, not the transfer. Bare
+`open()` decodes as cp1252 on Windows while `nbformat` uses UTF-8, so
+every cell containing a `+/-` character hashed differently. Exactly the 14
+non-ASCII cells; all passed once both sides read UTF-8.
+
+**Backup**: the pre-split combined notebook is tagged `pre-notebook-split`
+(at `e771cc2`). Recover with
+`git show pre-notebook-split:heat_eqn_pinn.ipynb > recovered.ipynb`. A
+committed duplicate notebook was considered and rejected: it would be a
+70KB copy in a public repo that drifts out of sync and leaves readers
+unsure which file is authoritative, when Git already stores the combined
+version immutably.
+
+**Files changed**: `heat_eqn_pinn.ipynb` -> `heat_eqn_pinn_forward.ipynb`
+(git-tracked rename, so history follows the forward half) and truncated;
+new `heat_eqn_pinn_inverse.ipynb`; `CLAUDE.md` file list rewritten;
+`README.md` notebook links and descriptions updated; `pinn_core.py` module
+docstring corrected, it still claimed a single notebook drove everything;
+this file.
+
+**Deliberately left undone**, so the split commit contains only moved
+bytes: the inverse notebook's overview cell still describes both problems,
+it opens with a stray `INVERSE START` line, and its cell 24 comment still
+references `forward_config`. The 15 `**TODO:**` cells are also untouched,
+now splitting 9 forward and 6 inverse.
 
 ## Session Update (September 11, 2026)
 
@@ -33,8 +95,11 @@ changed the branching model:
   resolve by re-deleting them on `main`'s side.
 - `methodology-cleanup` remains the full working branch, unchanged in
   spirit -- still has both files, still where all real work happens.
-- `main` currently sits 4 commits behind `methodology-cleanup` (last
-  synced at `a1a35b3`); not yet re-synced pending more comment cleanup.
+- `main` was re-synced September 23, 2026 (merge `b28a197`) and contains
+  everything through `e771cc2`. It differs from `methodology-cleanup` only
+  in `.gitignore`, `CLAUDE.md`, and `PROJECT_STATUS.md`, which is the
+  intended public-branch exclusion. The earlier "4 commits behind" note
+  here was stale and has been corrected.
 
 **Renames** (`a1a35b3`): `pinn_shared.py` -> `pinn_core.py`,
 `heat_pinn_tuned.ipynb` -> `heat_eqn_pinn.ipynb` -- "shared" stopped being
@@ -42,6 +107,9 @@ accurate once `heat_pinn_basic.ipynb` was retired. `README.md` rewritten:
 frames the project as independent research continuing past undergrad, adds
 a "Project history" section explaining the thesis PDF is the pre-cleanup
 starting point (kept for provenance, not current methodology).
+(Superseded October 1, 2026: the repo has two notebooks again after the
+forward/inverse split, so this specific rationale no longer holds.
+`pinn_core.py` remains an accurate name, since both notebooks import it.)
 
 **Forward comparison table fixes** (`43e3c6e`, `e48cfc0`): two real gaps
 found and fixed, not just cosmetic --
@@ -69,12 +137,14 @@ externally. Acknowledged as a minor, non-recoverable loss (not committed,
 not recoverable from git). Fix applied (`5248a2f`): cleared all cell
 outputs, shrinking the file to ~70KB / ~27,643 tokens -- still about 10%
 over the tool's limit (confirmed content-driven via a compact-JSON test,
-not a formatting issue), so `NotebookEdit` is still not usable yet.
-**Until the notebook drops under the token limit**, follow this protocol
-when editing it together: save any pending VS Code changes before Claude
-edits the file; reload/revert the file in VS Code after Claude edits it.
-Re-check periodically whether ongoing comment trimming has closed the gap
--- once it does, normal live-synced editing resumes automatically.
+not a formatting issue).
+**Resolved October 1, 2026** by the forward/inverse notebook split: forward
+is ~32.7 KB (~12,800 tokens) and inverse ~37.8 KB (~14,810 tokens), both
+roughly half the 25K-token limit. The save-before-edit / reload-after-edit
+protocol is retired and live-synced `NotebookEdit` should work normally.
+(Token figures are ratio estimates calibrated on the September 11
+measurement, not exact; the margin is wide enough that the conclusion
+holds regardless.)
 
 **Comment cleanup in progress** (researcher-driven, ongoing): established
 convention this session -- no em dashes in comments (or any written text)
@@ -179,9 +249,9 @@ GitHub.
 
 The repository currently contains:
 
-- `pinn_shared.py`
-- `heat_pinn_basic.ipynb`
-- `heat_pinn_tuned.ipynb`
+- `pinn_core.py`
+- `heat_eqn_pinn_forward.ipynb`
+- `heat_eqn_pinn_inverse.ipynb`
 - `James_Desjarlais_PINN_Final.pdf`
 - `README.md`
 - `requirements.txt`
@@ -225,11 +295,6 @@ targets, not permission to change everything at once:
   observation generation itself was already fixed the same day).
 - `N_bc` represents points per boundary, so the actual total is twice the
   configuration value -- a naming-clarity issue, not a correctness bug.
-- `heat_pinn_basic.ipynb` duplicates logic that now lives in `pinn_shared.py`
-  and should eventually be removed. Its blocking condition (real Optuna
-  sweep run, baseline/tuned numbers confirmed sane) is now satisfied as of
-  August 22, 2026 -- see "Real Sweep Results" above. Ready to remove,
-  pending explicit approval.
 - Minor, low-priority cosmetic-only inconsistencies (not correctness
   issues): `FORWARD_FIXED_CONFIG["lambda_pde"]` is an int (`1`) while
   `INVERSE_FIXED_CONFIG["lambda_pde"]` is a float (`1.0`), functionally
@@ -237,10 +302,6 @@ targets, not permission to change everything at once:
   prefix while inverse's use `tuned_inverse_` for the analogous quantity;
   one stale comment in the representative-run plotting cell references an
   "avoid two copies" rationale that no longer quite applies.
-- `README.md` is still a single placeholder sentence -- a fresh clone has
-  no setup instructions. `requirements.txt` now exists (see GPU Migration
-  item 4 above), including the CUDA-index-URL caveat that should be copied
-  into the README when it's written.
 - Whether to add a same-hardware CPU-only PINN timing as a secondary
   control line (alongside CN's already-disclosed CPU-only cost) is still an
   open researcher decision, not yet made either way.
@@ -697,9 +758,16 @@ worth a one-line fix whenever convenient.
 
 ## Current Uncommitted Changes
 
-None as of this update -- everything through the September 11, 2026
-session is committed and pushed to `origin/methodology-cleanup` (up to
-`5248a2f`). `main` is 4 commits behind, not yet re-synced.
+The October 1, 2026 notebook split, uncommitted and unpushed:
+`heat_eqn_pinn.ipynb` renamed (git-tracked rename) to
+`heat_eqn_pinn_forward.ipynb` and truncated to cells 0-22; new
+`heat_eqn_pinn_inverse.ipynb` (the shared imports cell plus cells 23-45);
+`CLAUDE.md`, `README.md`, and `pinn_core.py`'s module docstring updated;
+this file updated. Verified byte-identical to the pre-split notebook
+(per-cell SHA256 across all 47 cell mappings, plus a pyflakes
+undefined-name scan showing zero undefined names in either notebook,
+confirming neither half depends on the other). Pre-split state is tagged
+`pre-notebook-split`.
 
 ## Open TODO: AI-assistance disclaimer
 
@@ -719,21 +787,25 @@ evidence backing the disclaimer.
 
 ## Next Recommended Step
 
-Continue the researcher-driven comment-cleanup pass on `heat_eqn_pinn.ipynb`
-(in progress) -- apply the two pending comment simplifications noted in
-"Session Update (September 11, 2026)" above if still wanted, and keep the
-save-before-edit/reload-after-edit protocol until the notebook drops under
-NotebookEdit's token limit. Several `**TODO:**` markdown cells are also
-still unfilled (grep for `TODO`). Once the researcher is satisfied with
-that pass (or decides to finish it after the run instead -- either order
-works since these edits never require a rerun), the next real blocker is
-the **final full run**: 300 trials for both problems, all sensitivity
-sweeps, including the two CPU-control cells, the log-scale plot fix, and
-this session's table/convergence-study fixes. This is the expensive step
-(roughly 1.5-2 hours based on the August 22 run) and needs explicit
-researcher approval to kick off, per `CLAUDE.md`. After that: commit the
-executed notebook, re-sync `main`, decide the inverse result's paper
-framing (still open, see item 2 further up), and then the paper itself.
+Three prose items were left deliberately unfixed so the split commit would
+contain only moved bytes: the inverse notebook's overview cell still
+describes both problems, it opens with a stray `INVERSE START` line, and
+its cell 24 comment still references `forward_config`. Fix those, then
+continue the `**TODO:**` markdown pass, now 9 cells in the forward
+notebook and 6 in the inverse (6 of the 15 are blocked until after the
+final run, since they summarize results that do not exist yet).
+
+A condensing pass on this file is also agreed and pending: it has grown to
+roughly 740 lines, against `CLAUDE.md`'s instruction to keep it concise
+and current rather than an endlessly growing transcript.
+
+After that the next real blocker is unchanged: the **final full run**, 300
+trials for both problems plus all sensitivity sweeps and the two
+CPU-control cells, roughly 1.5-2 hours, requiring explicit approval. The
+split means forward and inverse can now be run separately, so a crash in
+one no longer costs the other. Then: commit the executed notebooks,
+re-sync `main`, settle the inverse result's paper framing, and write the
+paper.
 
 ## Suggested First Message to Claude
 

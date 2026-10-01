@@ -24,11 +24,10 @@ The code and experiments are functionally complete: PINN/inverse/CN
 implementations, Optuna hyperparameter search for both problems, leakage-safe
 multi-seed evaluation, and sensitivity sweeps have all been run successfully.
 
-**Still in progress**: the explanatory markdown and code comments in
-[`heat_eqn_pinn.ipynb`](heat_eqn_pinn.ipynb) are being filled in and revised,
-and the write-up (paper) has not been started yet. One more full Optuna
-sweep is planned to regenerate final citable numbers now that the notebook
-cleanup is complete.
+**Still in progress**: the explanatory markdown and code comments in the two
+notebooks are being filled in and revised, and the write-up (paper) has not
+been started yet. One more full Optuna sweep is planned to regenerate final
+citable numbers now that the notebook cleanup is complete.
 
 ## Project history
 
@@ -45,9 +44,16 @@ state. It's kept here for provenance.
 - [`pinn_core.py`](pinn_core.py) — PINN architecture, training loops
   (forward and inverse), sampling, losses, the Crank-Nicolson forward
   solver, and the CN-based inverse (least-squares) estimator.
-- [`heat_eqn_pinn.ipynb`](heat_eqn_pinn.ipynb) — Optuna tuning,
-  baseline-vs-tuned-vs-classical comparisons, and sensitivity sweeps for
-  both the forward and inverse problems.
+- [`heat_eqn_pinn_forward.ipynb`](heat_eqn_pinn_forward.ipynb) — the forward
+  problem: baseline PINN, Optuna tuning, Crank-Nicolson comparison, the
+  finite-difference convergence study, and a diffusivity sensitivity sweep.
+- [`heat_eqn_pinn_inverse.ipynb`](heat_eqn_pinn_inverse.ipynb) — the inverse
+  problem: baseline PINN, Optuna tuning with a leakage-safe
+  search/confirmation/final-evaluation split, the CN least-squares
+  comparison, and sweeps over noise, observation count, and diffusivity.
+
+  The two notebooks share no runtime state, so either can be run on its own,
+  in either order. Both import from `pinn_core.py`.
 - [`James_Desjarlais_PINN_Final.pdf`](James_Desjarlais_PINN_Final.pdf) —
   the original undergraduate thesis (see "Project history" above).
 
