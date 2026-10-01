@@ -79,9 +79,11 @@ this file.
 
 **Deliberately left undone**, so the split commit contains only moved
 bytes: the inverse notebook's overview cell still describes both problems,
-it opens with a stray `INVERSE START` line, and its cell 24 comment still
-references `forward_config`. The 15 `**TODO:**` cells are also untouched,
-now splitting 9 forward and 6 inverse.
+it opens with a stray `INVERSE START` line, its cell 2 comment still
+references `forward_config`, and the forward notebook's cell 21 has
+comments pointing at inverse-side content ("the inverse sweeps below",
+`winning_inverse_config`) that no longer lives in that file. The 15 `**TODO:**` cells are also untouched,
+now splitting 6 forward and 9 inverse.
 
 ## Session Update (September 11, 2026)
 
@@ -787,12 +789,15 @@ evidence backing the disclaimer.
 
 ## Next Recommended Step
 
-Three prose items were left deliberately unfixed so the split commit would
+Four prose items were left deliberately unfixed so the split commit would
 contain only moved bytes: the inverse notebook's overview cell still
-describes both problems, it opens with a stray `INVERSE START` line, and
-its cell 24 comment still references `forward_config`. Fix those, then
-continue the `**TODO:**` markdown pass, now 9 cells in the forward
-notebook and 6 in the inverse (6 of the 15 are blocked until after the
+describes both problems, it opens with a stray `INVERSE START` line, its
+cell 2 comment still references `forward_config`, and the forward
+notebook's sensitivity-sweep cell (cell 21) has comment lines referencing
+"the inverse sweeps below", `winning_inverse_config`, and "the inverse
+alpha sweep later", none of which are in that file any more. Fix those, then
+continue the `**TODO:**` markdown pass, now 6 cells in the forward
+notebook and 9 in the inverse (6 of the 15 are blocked until after the
 final run, since they summarize results that do not exist yet).
 
 A condensing pass on this file is also agreed and pending: it has grown to
